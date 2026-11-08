@@ -292,7 +292,87 @@ function buildGeo(vs, solid) {
   geo.setAttribute('ao', new THREE.Float32BufferAttribute(A, 1));
   geo.setIndex(I);
   geo.computeBoundingSphere();
+  geo.userData.src = { vs, solid };
   return geo;
+}
+
+// Smooth version of the same voxels: naive surface nets on the voxel occupancy, then Taubin smoothing
+// (alternating shrink/inflate steps so thin branches and fins keep their size). Same coordinate space,
+// colour and ao attributes as the block mesh, so materials and animation work on either.
+const NETS_EDGES = [];
+for (let i = 0; i < 8; i++) for (const bit of [1, 2, 4]) if (!(i & bit)) NETS_EDGES.push([i, i | bit]);
+const SAND_LIN = [LIN8[0xb8], LIN8[0xa0], LIN8[0x77]];
+function buildSmoothGeo(vs, solid) {
+  solid = solid || ((x, y, z) => vs.has(x, y, z));
+  const cells = new Map(), P = [], C = [], A = [], I = [], o = new Array(8);
+  function cell(cx, cy, cz) {
+    const k = ((cx + 512) * 1024 + (cy + 512)) * 1024 + (cz + 512);
+    let id = cells.get(k);
+    if (id !== undefined) return id;
+    let r = 0, g = 0, b = 0, cn = 0, occ = 0;
+    for (let i = 0; i < 8; i++) {
+      const x = cx + (i & 1), y = cy + ((i >> 1) & 1), z = cz + ((i >> 2) & 1);
+      o[i] = solid(x, y, z);
+      if (!o[i]) continue;
+      occ++;
+      const v = vs.get(x, y, z);
+      if (v) { const h = v[3]; r += LIN8[(h >> 16) & 255]; g += LIN8[(h >> 8) & 255]; b += LIN8[h & 255]; cn++; }
+    }
+    let px = 0, py = 0, pz = 0, n = 0;
+    for (const [a, c] of NETS_EDGES) if (o[a] !== o[c]) {
+      px += ((a & 1) + (c & 1)) * 0.5; py += (((a >> 1) & 1) + ((c >> 1) & 1)) * 0.5; pz += (((a >> 2) & 1) + ((c >> 2) & 1)) * 0.5; n++;
+    }
+    if (!n) n = 1;
+    id = P.length / 3;
+    P.push(cx + px / n, cy + py / n, cz + pz / n);
+    if (cn) C.push(r / cn, g / cn, b / cn); else C.push(SAND_LIN[0], SAND_LIN[1], SAND_LIN[2]);
+    A.push(Math.max(0.45, Math.min(1, 1.15 - (occ / 8) * 0.65)));
+    cells.set(k, id);
+    return id;
+  }
+  const base = [0, 0, 0], q = [0, 0, 0, 0];
+  const QUAD = [[-1, -1], [0, -1], [0, 0], [-1, 0]];
+  for (const [x, y, z] of vs.m.values()) {
+    for (let a = 0; a < 3; a++) for (let sgn = -1; sgn <= 1; sgn += 2) {
+      if (solid(x + (a === 0 ? sgn : 0), y + (a === 1 ? sgn : 0), z + (a === 2 ? sgn : 0))) continue;
+      const b1 = (a + 1) % 3, b2 = (a + 2) % 3;
+      base[0] = x; base[1] = y; base[2] = z;
+      if (sgn < 0) base[a] -= 1;
+      for (let k = 0; k < 4; k++) {
+        const c = base.slice(); c[b1] += QUAD[k][0]; c[b2] += QUAD[k][1];
+        q[k] = cell(c[0], c[1], c[2]);
+      }
+      if (sgn > 0) I.push(q[0], q[1], q[2], q[0], q[2], q[3]);
+      else I.push(q[0], q[2], q[1], q[0], q[3], q[2]);
+    }
+  }
+  const nV = P.length / 3, pos = Float32Array.from(P), sum = new Float32Array(nV * 3), cnt = new Float32Array(nV);
+  const add = (i, j) => { sum[i * 3] += pos[j * 3]; sum[i * 3 + 1] += pos[j * 3 + 1]; sum[i * 3 + 2] += pos[j * 3 + 2]; cnt[i]++; };
+  for (const lam of [0.6, -0.62, 0.6, -0.62, 0.6, -0.62, 0.6, -0.62, 0.6, -0.62]) {
+    sum.fill(0); cnt.fill(0);
+    for (let t = 0; t < I.length; t += 3) {
+      const i0 = I[t], i1 = I[t + 1], i2 = I[t + 2];
+      add(i0, i1); add(i1, i0); add(i1, i2); add(i2, i1); add(i2, i0); add(i0, i2);
+    }
+    for (let v = 0; v < nV; v++) {
+      if (!cnt[v]) continue;
+      for (let c = 0; c < 3; c++) pos[v * 3 + c] += lam * (sum[v * 3 + c] / cnt[v] - pos[v * 3 + c]);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  geo.setAttribute('ao', new THREE.Float32BufferAttribute(A, 1));
+  geo.setIndex(I);
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  return geo;
+}
+const smoothCache = new Map();
+function smoothOf(blockGeo) {
+  let g = smoothCache.get(blockGeo);
+  if (!g) { g = buildSmoothGeo(blockGeo.userData.src.vs, blockGeo.userData.src.solid); smoothCache.set(blockGeo, g); }
+  return g;
 }
 
 // ---------- renderer / scene ----------
@@ -380,6 +460,16 @@ float styleLight(float nl) {
   if (uStyle > 2.5 && uStyle < 3.5) return (nl < 0.1 ? 0.0 : (nl < 0.5 ? 0.6 : 1.0)) / max(nl, 0.05);    // pixel: stepped
   return 1.0;
 }
+float sHash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+float sNoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(sHash(i), sHash(i + vec2(1.0, 0.0)), f.x), mix(sHash(i + vec2(0.0, 1.0)), sHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float triN(vec3 p, float f, vec3 w) { return sNoise(p.yz * f) * w.x + sNoise(p.xz * f) * w.y + sNoise(p.xy * f) * w.z; }
+float sLine(float c) { float f = abs(fract(c) - 0.5) * 2.0; return 1.0 - smoothstep(0.55, 0.85, f); }
+float triHatch(vec3 p, float f, float d, vec3 w) {
+  return sLine((p.y + d * p.z) * f) * w.x + sLine((p.x + d * p.z) * f) * w.y + sLine((p.x + d * p.y) * f) * w.z;
+}
 float styleAO(float a) {
   if (uStyle > 0.5 && uStyle < 1.5) return mix(0.72, 1.0, step(0.78, a));
   if (uStyle > 1.5 && uStyle < 2.5) return mix(1.0, a, 0.5);
@@ -390,39 +480,28 @@ float styleAO(float a) {
 const STYLE_SURFACE_GLSL = `
 {
   vec3 sn = normalize(vObjN);
-  vec2 fuv = abs(sn.x) > 0.5 ? vLocal.zy : (abs(sn.y) > 0.5 ? vLocal.xz : vLocal.xy);
-  vec2 ff = fract(fuv + 0.5);
-  vec3 vid = floor(vLocal + 0.5 - sn * 0.25);
-  float vh = fract(sin(dot(vid, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-  float bd = max(abs(ff.x - 0.5), abs(ff.y - 0.5)) * 2.0;
+  vec3 tw = pow(abs(sn), vec3(4.0)); tw /= (tw.x + tw.y + tw.z);
+  vec3 sp = vWPos;
+  float fres = 1.0 - abs(dot(normalize(normal), normalize(vViewPosition)));
   if (uStyle > 0.5 && uStyle < 1.5) {
-    float rim = pow(1.0 - abs(dot(normalize(normal), normalize(vViewPosition))), 3.0);
-    gl_FragColor.rgb += diffuseColor.rgb * step(0.35, rim) * 0.22;
+    gl_FragColor.rgb += diffuseColor.rgb * step(0.62, fres) * 0.25;
   } else if (uStyle > 1.5 && uStyle < 2.5) {
     vec3 c = gl_FragColor.rgb;
     float lum = dot(c, vec3(0.3, 0.59, 0.11));
-    float gran = fract(sin(dot(floor(ff * 9.0) + vid.xz * 3.1 + vid.y, vec2(12.9898, 78.233))) * 43758.5453);
-    float pool = smoothstep(0.7, 1.0, bd);
-    c = mix(c, vec3(lum), 0.15) * (0.9 + 0.2 * vh);
-    c *= 1.0 - pool * 0.38;
-    c *= 0.9 + 0.14 * gran;
-    c = mix(c, c * 1.25 + 0.02, 0.35 * (1.0 - smoothstep(0.0, 0.6, bd)));
+    float gran = triN(sp, 16.0, tw), blot = triN(sp, 0.9, tw);
+    c = mix(c, vec3(lum), 0.12) * (0.86 + 0.28 * blot);
+    c *= 0.9 + 0.16 * gran;
+    c *= 1.0 - pow(fres, 2.5) * 0.4;                       // pigment collects at the silhouette
+    c *= mix(0.72, 1.0, smoothstep(0.55, 0.95, vAo));      // and in hollows
     gl_FragColor.rgb = c;
-  } else if (uStyle > 2.5 && uStyle < 3.5) {
-    vec2 tx = floor(ff * 6.0);
-    float th = fract(sin(dot(tx + vid.xy * 7.0 + vid.z * 13.0, vec2(12.9898, 78.233))) * 43758.5453);
-    float bevel = (tx.x < 0.5 || tx.y > 4.5) ? 1.2 : ((tx.x > 4.5 || tx.y < 0.5) ? 0.75 : 1.0);
-    gl_FragColor.rgb *= bevel * (0.88 + 0.24 * th);
   } else if (uStyle > 3.5) {
     float lum = clamp(pow(dot(gl_FragColor.rgb, vec3(0.3, 0.59, 0.11)), 0.6) * 1.5, 0.0, 1.0);
-    float h1 = abs(fract((ff.x + ff.y) * 3.0) - 0.5) * 2.0, h2 = abs(fract((ff.x - ff.y) * 3.0) - 0.5) * 2.0;
-    float k = (1.0 - smoothstep(0.6, 0.85, h1)) * (1.0 - smoothstep(0.42, 0.58, lum)) * 0.75;
-    k = max(k, (1.0 - smoothstep(0.6, 0.85, h2)) * (1.0 - smoothstep(0.18, 0.32, lum)));
-    k = max(k, smoothstep(0.84, 0.94, bd) * 0.5);
-    k = max(k, (1.0 - smoothstep(0.55, 0.8, vAo)) * 0.6);
+    float k = triHatch(sp, 9.0, 1.0, tw) * (1.0 - smoothstep(0.42, 0.58, lum)) * 0.75;
+    k = max(k, triHatch(sp, 9.0, -1.0, tw) * (1.0 - smoothstep(0.18, 0.32, lum)));
+    k = max(k, smoothstep(0.6, 0.85, fres) * 0.8);
+    k = max(k, (1.0 - smoothstep(0.55, 0.85, vAo)) * 0.55);
     vec3 paper = vec3(0.86, 0.8, 0.68);
-    vec3 wash = mix(paper, paper * (vColor.rgb * 1.8 + 0.2), 0.5);
-    gl_FragColor.rgb = mix(wash, vec3(0.022, 0.02, 0.028), k);
+    gl_FragColor.rgb = mix(mix(paper, paper * (vColor.rgb * 1.8 + 0.2), 0.5), vec3(0.022, 0.02, 0.028), k);
   }
 }`;
 function injectCaustics(sh) {
@@ -1798,7 +1877,9 @@ void main() {
     col *= 0.95 + 0.05 * paper;
   } else if (pixel) {
     float b = bayer4(floor(vUv / (uTexel * uPixel))) - 0.5;
-    col = clamp(floor(col * 8.0 + 0.5 + b * 0.25) / 8.0, 0.0, 1.0);
+    col = clamp(floor(col * 6.0 + 0.5 + b * 0.4) / 6.0, 0.0, 1.0);
+    vec2 pe = edges2(uv, uPixel);
+    col = mix(col, col * 0.25, clamp(pe.x, 0.0, 1.0));
   } else if (ink) {
     vec2 ie = edges2(uv, 1.2);
     col *= 0.95 + 0.05 * fbm(fp * 0.03);
@@ -1826,7 +1907,7 @@ void main() {
     }
     compMat.uniforms.uHalfTexel.value.set(1 / hw, 1 / hh);
     compMat.uniforms.uTexel.value.set(1 / w, 1 / h);
-    compMat.uniforms.uPixel.value = Math.max(2, Math.round(3 * renderer.getPixelRatio()));
+    compMat.uniforms.uPixel.value = Math.max(3, Math.round(4 * renderer.getPixelRatio()));
   }
   function run(mat, target) { quad.material = mat; renderer.setRenderTarget(target); renderer.render(fsScene, fsCam); }
   function render() {
@@ -2025,6 +2106,7 @@ $('b-add').addEventListener('click', () => {
   if (fishes.length >= 40) return;
   const type = ['blueTang', 'yellowTang', 'gramma', 'chromis', 'chromis'][RI(0, 4)];
   select(addFish(type, new V3(R(-12, 12), WATER - 1.5, R(-4, 4))));
+  if (curStyle !== 'voxel' && smoothReady) applyGeometry(true);
 });
 const labelLayer = $('labels');
 labelLayer.hidden = true;
@@ -2048,9 +2130,28 @@ const STYLES = ['voxel', 'cel', 'watercolor', 'pixel', 'ink'];
 const PAPER = new THREE.Color(0xf2ead8), roomBg = scene.background, backTex = backMat.map;
 let curStyle = 'voxel';
 const styleBtns = [...document.querySelectorAll('.chip[data-style]')];
+let smoothReady = false;
+function applyGeometry(smooth) {
+  scene.traverse((o) => {
+    if (!o.isMesh) return;
+    const blk = o.userData.blockGeo || (o.geometry.userData && o.geometry.userData.src ? o.geometry : null);
+    if (!blk) return;
+    o.userData.blockGeo = blk;
+    o.geometry = smooth ? smoothOf(blk) : blk;
+  });
+}
 function setStyle(name) {
   const i = STYLES.indexOf(name);
   if (i < 0) return;
+  const smooth = name !== 'voxel';
+  if (smooth && !smoothReady) {
+    const ld = document.getElementById('loading');
+    ld.textContent = 'Reshaping the reef…'; ld.hidden = false;
+    for (const b of styleBtns) b.setAttribute('aria-pressed', String(b.dataset.style === name));
+    setTimeout(() => { applyGeometry(true); smoothReady = true; ld.hidden = true; setStyle(name); }, 40);
+    return;
+  }
+  applyGeometry(smooth);
   post.comp.uStyle.value = i; U.uStyle.value = i; curStyle = name;
   const isInk = name === 'ink';
   scene.background = isInk ? PAPER : roomBg;

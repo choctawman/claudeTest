@@ -123,6 +123,7 @@ h1 span { color: var(--accent); }
 }
 .btn:hover { border-color: rgba(150, 220, 235, 0.45); }
 .btn .vox { width: 9px; height: 9px; border-radius: 1px; background: var(--c, var(--accent)); }
+.btn-small { align-self: flex-start; padding: 8px 12px; font-size: 13px; }
 .btn[aria-pressed="true"] { border-color: var(--actinic); box-shadow: inset 0 0 0 1px var(--actinic); }
 .hint {
   margin: 0; text-align: center; font-size: 12px; color: var(--muted);
@@ -161,15 +162,17 @@ h1 span { color: var(--accent); }
         <button id="card-close" class="icon-btn" type="button" aria-label="Close">×</button>
       </div>
       <p id="card-fact" class="fact"></p>
+      <button id="card-follow" class="btn btn-small" type="button" aria-pressed="false">Follow</button>
     </aside>
     <nav class="controls" aria-label="Tank controls">
       <button id="b-feed" class="btn" type="button"><span class="vox" style="--c: var(--accent)"></span>Feed</button>
       <button id="b-light" class="btn" type="button" aria-pressed="false"><span class="vox" style="--c: var(--actinic)"></span><span id="b-light-label">Daylight</span></button>
       <button id="b-labels" class="btn" type="button" aria-pressed="false"><span class="vox" style="--c: var(--coral)"></span>Coral names</button>
       <button id="b-add" class="btn" type="button"><span class="vox" style="--c: var(--kelp)"></span>Add fish</button>
+      <button id="b-reset" class="btn" type="button"><span class="vox" style="--c: var(--fg)"></span>Reset view</button>
       <button id="b-drift" class="btn" type="button" aria-pressed="true"><span class="vox" style="--c: var(--muted)"></span>Drift camera</button>
     </nav>
-    <p class="hint">Drag to look around · Scroll or pinch to zoom · Tap the water to feed · Tap a fish or coral to identify it</p>
+    <p class="hint">Drag to orbit · Right-drag, Shift-drag or two fingers to pan · Scroll or pinch to zoom toward the pointer · Tap the water to feed · Tap a fish or coral to identify it</p>
   </div>
 </div>
 
@@ -605,7 +608,7 @@ function placeCoral(key, wx, wz, build, mat, { rotY = R(0, Math.PI * 2), solid =
     const ci = colIdx(ix, iz);
     if (iy > heightAll[ci]) heightAll[ci] = iy;
   }
-  const obj = { info: INFO[key], pos: new V3(wx, baseY + maxY * CV + 0.1, wz), mesh };
+  const obj = { info: INFO[key], pos: new V3(wx, baseY + maxY * CV + 0.1, wz), mesh, static: true };
   mesh.userData.pick = obj; pickables.push(mesh);
   if (label) LABELS.push(obj);
   return obj;
@@ -1013,7 +1016,7 @@ function kelp(wx, wz, blades, hMin, hMax, label) {
   m.position.set(ix * G, (ty + 1) * G, iz * G);
   m.castShadow = true; m.receiveShadow = true;
   scene.add(m);
-  const obj = { info: INFO.caulerpa, pos: new V3(m.position.x, m.position.y + top * G * 0.6, m.position.z), mesh: m };
+  const obj = { info: INFO.caulerpa, pos: new V3(m.position.x, m.position.y + top * G * 0.6, m.position.z), mesh: m, static: true };
   m.userData.pick = obj; pickables.push(m);
   if (label) LABELS.push(obj);
 }
@@ -1463,8 +1466,10 @@ const marker = new THREE.Mesh(new THREE.OctahedronGeometry(0.2), new THREE.MeshB
 marker.visible = false; scene.add(marker);
 let selected = null;
 
-// ---------- camera control ----------
-const cam = { theta: 0, phi: 0.17, zoom: 0.78, target: new V3(0, 7.5, 0), drift: !matchMedia('(prefers-reduced-motion: reduce)').matches, lastUser: -1e9 };
+// ---------- camera control: orbit, pan, zoom toward the pointer, follow ----------
+const HOME = { theta: 0, phi: 0.17, target: new V3(0, 7.5, 0) };
+const cam = { theta: HOME.theta, phi: HOME.phi, dist: 0, target: HOME.target.clone(), drift: !matchMedia('(prefers-reduced-motion: reduce)').matches, lastUser: -1e9, follow: null };
+const MIN_DIST = 0.3;
 let fitR = 46;
 function resize() {
   const w = host.clientWidth, h = host.clientHeight;
@@ -1473,66 +1478,122 @@ function resize() {
   const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
   const halfW = camera.aspect < 1 ? 14.5 : 25;
   fitR = Math.min(Math.max(16.5 / tanV, halfW / (tanV * camera.aspect)), 92);
+  if (!cam.dist) cam.dist = fitR * 0.78;
 }
 window.addEventListener('resize', resize); resize();
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function clampTarget() {
+  const t = cam.target;
+  t.x = clamp(t.x, -W / 2 - 4, W / 2 + 4); t.y = clamp(t.y, -3, TOP + 2); t.z = clamp(t.z, -D / 2 - 4, D / 2 + 4);
+}
 
 const el = renderer.domElement;
+const raycaster = new THREE.Raycaster(), ndc = new THREE.Vector2();
+const camRight = new V3(), camUp = new V3(), camFwd = new V3();
+function userMoved() { cam.lastUser = performance.now(); }
+function pan(dx, dy) {
+  const scale = cam.dist * 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.max(1, host.clientHeight);
+  camRight.setFromMatrixColumn(camera.matrix, 0); camUp.setFromMatrixColumn(camera.matrix, 1);
+  cam.target.addScaledVector(camRight, -dx * scale).addScaledVector(camUp, dy * scale);
+  stopFollow(); clampTarget();
+}
+function rayAt(cx, cy) {
+  const r = el.getBoundingClientRect();
+  ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  return raycaster.ray;
+}
+// first point along the pointer ray that touches sand, rock or coral
+function pickPoint(cx, cy) {
+  const ray = rayAt(cx, cy), p = new V3();
+  const hit = raycaster.intersectObjects(pickables, false)[0];
+  const maxD = hit ? hit.distance : 160;
+  for (let d = 0.05; d < maxD; d += 0.12) {
+    p.copy(ray.origin).addScaledVector(ray.direction, d);
+    if (Math.abs(p.x) > W / 2 || Math.abs(p.z) > D / 2 || p.y > WATER || p.y < -0.3) continue;
+    if (p.y <= floorY(p.x, p.z) || solidAt(p)) return p;
+  }
+  if (hit) return hit.point.clone();
+  return ray.origin.clone().addScaledVector(ray.direction, cam.dist);
+}
+function zoomAt(factor, cx, cy) {
+  const nd = clamp(cam.dist * factor, MIN_DIST, fitR * 1.7);
+  const f = nd / cam.dist;
+  if (cx !== undefined && !cam.follow) { cam.target.lerp(pickPoint(cx, cy), 1 - f); clampTarget(); }
+  cam.dist = nd;
+  userMoved();
+}
+
 const ptrs = new Map();
-let moved = 0, pinch0 = 0, zoom0 = 1;
+let moved = 0, lastPinch = 0, lastMid = null;
+const mid = () => { const [a, b] = [...ptrs.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) }; };
+el.addEventListener('contextmenu', (e) => e.preventDefault());
 el.addEventListener('pointerdown', (e) => {
   el.setPointerCapture(e.pointerId);
-  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, pan: e.button === 1 || e.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey });
   if (ptrs.size === 1) moved = 0;
-  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a.x - b.x, a.y - b.y); zoom0 = cam.zoom; moved = 99; }
-  cam.lastUser = performance.now();
+  if (ptrs.size === 2) { const m = mid(); lastPinch = m.d; lastMid = m; moved = 99; }
+  userMoved();
 });
 el.addEventListener('pointermove', (e) => {
   const p = ptrs.get(e.pointerId); if (!p) return;
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
   p.x = e.clientX; p.y = e.clientY;
   if (ptrs.size === 1) {
-    cam.theta -= dx * 0.005;
-    cam.phi = Math.max(-0.12, Math.min(0.8, cam.phi + dy * 0.004));
+    if (p.pan) pan(dx, dy);
+    else { cam.theta -= dx * 0.005; cam.phi = clamp(cam.phi + dy * 0.004, -1.2, 1.45); }
     moved += Math.abs(dx) + Math.abs(dy);
   } else if (ptrs.size === 2) {
-    const [a, b] = [...ptrs.values()];
-    const d = Math.hypot(a.x - b.x, a.y - b.y);
-    if (pinch0 > 0) cam.zoom = Math.max(0.3, Math.min(1.7, zoom0 * pinch0 / d));
+    const m = mid();
+    if (lastPinch > 0 && m.d > 0) zoomAt(lastPinch / m.d, m.x, m.y);
+    if (lastMid) pan(m.x - lastMid.x, m.y - lastMid.y);
+    lastPinch = m.d; lastMid = m;
   }
-  cam.lastUser = performance.now();
+  userMoved();
 });
 function endPtr(e) {
   if (!ptrs.has(e.pointerId)) return;
-  if (ptrs.size === 1 && moved < 6 && e.type === 'pointerup') tap(e.clientX, e.clientY);
+  if (ptrs.size === 1 && moved < 6 && e.type === 'pointerup' && !ptrs.get(e.pointerId).pan) tap(e.clientX, e.clientY);
   ptrs.delete(e.pointerId);
+  if (ptrs.size < 2) { lastPinch = 0; lastMid = null; }
 }
 el.addEventListener('pointerup', endPtr);
 el.addEventListener('pointercancel', endPtr);
 el.addEventListener('wheel', (e) => {
   e.preventDefault();
-  cam.zoom = Math.max(0.3, Math.min(1.7, cam.zoom * Math.exp(e.deltaY * 0.001)));
-  cam.lastUser = performance.now();
+  zoomAt(Math.exp(clamp(e.deltaY, -120, 120) * 0.0015), e.clientX, e.clientY);
 }, { passive: false });
 window.addEventListener('keydown', (e) => {
-  if (e.target.closest && e.target.closest('button')) return;
-  const k = e.key;
-  if (k === 'ArrowLeft') cam.theta += 0.08; else if (k === 'ArrowRight') cam.theta -= 0.08;
-  else if (k === 'ArrowUp') cam.phi = Math.min(0.8, cam.phi + 0.05); else if (k === 'ArrowDown') cam.phi = Math.max(-0.12, cam.phi - 0.05);
-  else if (k === '+' || k === '=') cam.zoom = Math.max(0.3, cam.zoom * 0.92); else if (k === '-') cam.zoom = Math.min(1.7, cam.zoom * 1.08);
-  else return;
-  cam.lastUser = performance.now();
+  if (e.target.closest && e.target.closest('button, input, textarea')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'arrowleft') cam.theta += 0.08; else if (k === 'arrowright') cam.theta -= 0.08;
+  else if (k === 'arrowup') cam.phi = Math.min(1.45, cam.phi + 0.05); else if (k === 'arrowdown') cam.phi = Math.max(-1.2, cam.phi - 0.05);
+  else if (k === '+' || k === '=') zoomAt(0.85); else if (k === '-' || k === '_') zoomAt(1.18);
+  else if (k === 'a') pan(40, 0); else if (k === 'd') pan(-40, 0);
+  else if (k === 'q') pan(0, -40); else if (k === 'e') pan(0, 40);
+  else if (k === 'w' || k === 's') {
+    camFwd.subVectors(cam.target, camera.position).setY(0).normalize();
+    cam.target.addScaledVector(camFwd, (k === 'w' ? 1 : -1) * Math.max(0.15, cam.dist * 0.06));
+    stopFollow(); clampTarget();
+  } else return;
+  userMoved();
 });
 
-const raycaster = new THREE.Raycaster(), ndc = new THREE.Vector2();
 const tankBox = new THREE.Box3(new V3(-W / 2, 0, -D / 2), new V3(W / 2, WATER, D / 2));
 function tap(cx, cy) {
-  const r = el.getBoundingClientRect();
-  ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
-  raycaster.setFromCamera(ndc, camera);
+  rayAt(cx, cy);
   const hit = raycaster.intersectObjects(pickables, false)[0];
   if (hit) { select(hit.object.userData.pick); return; }
   const p = raycaster.ray.intersectBox(tankBox, new V3());
   if (p) dropFood(Math.max(-BX, Math.min(BX, p.x)), Math.max(-BZ, Math.min(BZ, p.z)));
+}
+function stopFollow() { if (cam.follow) { cam.follow = null; updateFollowBtn(); } }
+function updateFollowBtn() {
+  const b = document.getElementById('card-follow');
+  if (!b || !selected) return;
+  const on = cam.follow === selected;
+  b.setAttribute('aria-pressed', String(on));
+  b.textContent = selected.static ? (on ? 'Zoomed in' : 'Zoom in') : (on ? 'Following' : 'Follow');
 }
 
 // ---------- HUD ----------
@@ -1544,8 +1605,19 @@ function select(obj) {
   $('card-name').textContent = i.name; $('card-sci').textContent = i.sci; $('card-fact').textContent = i.fact;
   $('card-swatch').style.background = i.swatch;
   card.hidden = false;
+  if (cam.follow && cam.follow !== obj) cam.follow = null;
+  updateFollowBtn();
 }
-$('card-close').addEventListener('click', () => { card.hidden = true; selected = null; });
+$('card-close').addEventListener('click', () => { card.hidden = true; cam.follow = null; selected = null; });
+$('card-follow').addEventListener('click', () => {
+  if (!selected) return;
+  if (cam.follow === selected) cam.follow = null;
+  else { cam.follow = selected; cam.dist = Math.min(cam.dist, selected.static ? 4 : 2.5); userMoved(); }
+  updateFollowBtn();
+});
+$('b-reset').addEventListener('click', () => {
+  cam.theta = HOME.theta; cam.phi = HOME.phi; cam.target.copy(HOME.target); cam.dist = fitR * 0.78; cam.follow = null; updateFollowBtn(); userMoved();
+});
 $('b-feed').addEventListener('click', () => { dropFood(R(-10, 10), R(-4, 4)); dropFood(R(-10, 10), R(-4, 4)); });
 let nightTarget = 0, night = 0;
 $('b-light').addEventListener('click', (e) => {
@@ -1852,13 +1924,20 @@ function frame(now) {
   } else marker.visible = false;
 
   const idle = now - cam.lastUser > 6000;
-  if (cam.drift && idle) cam.theta += (Math.sin(t * 0.06) * 0.55 - cam.theta) * Math.min(1, dt * 0.25);
-  const rad = fitR * cam.zoom;
+  if (cam.drift && idle) cam.theta += Math.cos(t * 0.06) * 0.033 * dt;
+  if (cam.follow) cam.target.lerp(cam.follow.pos, Math.min(1, dt * 4));
+  const rad = cam.dist;
   camera.position.set(
     cam.target.x + rad * Math.sin(cam.theta) * Math.cos(cam.phi),
     cam.target.y + rad * Math.sin(cam.phi),
     cam.target.z + rad * Math.cos(cam.theta) * Math.cos(cam.phi));
+  if (Math.abs(camera.position.x) < W / 2 && Math.abs(camera.position.z) < D / 2) {
+    const fy = floorY(camera.position.x, camera.position.z) + 0.08;
+    if (camera.position.y < fy) camera.position.y = fy;
+  }
   camera.lookAt(cam.target);
+  const near = clamp(rad * 0.02, 0.01, 0.1);
+  if (Math.abs(camera.near - near) > 0.002) { camera.near = near; camera.updateProjectionMatrix(); }
 
   hudTimer -= dt;
   if (hudTimer <= 0) {

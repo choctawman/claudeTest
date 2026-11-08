@@ -292,7 +292,7 @@ const scene = new THREE.Scene();
   scene.background = tex;
 }
 const DAY_FOG = new THREE.Color(0x0b4a6e), NIGHT_FOG = new THREE.Color(0x080f3c);
-scene.fog = new THREE.FogExp2(DAY_FOG.clone(), 0.0105);
+scene.fog = new THREE.FogExp2(DAY_FOG.clone(), 0.0075);
 const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 400);
 
 const hemi = new THREE.HemisphereLight(0x9fe8ff, 0x3a2f2a, 0.3);
@@ -1081,10 +1081,15 @@ box(W + 1.2, 0.5, D + 1.2, darkMat, 0, TOP + 0.9, 0);
 const ledMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xdff6ff, emissiveIntensity: 1, fog: false });
 box(W - 4, 0.15, 2.2, ledMat, 0, TOP + 0.6, -1);
 const glass = new THREE.Mesh(new THREE.BoxGeometry(W + 0.2, TOP + 0.4, D + 0.2),
-  new THREE.MeshPhysicalMaterial({ color: 0xcff4ff, transparent: true, opacity: 0.07, roughness: 0.02, metalness: 0, clearcoat: 1, envMapIntensity: 1.6, depthWrite: false }));
+  // clear head-on; reflects only at grazing angles (Fresnel), so it never fogs the view
+  new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false,
+    vertexShader: 'varying vec3 vN; varying vec3 vV; void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }',
+    fragmentShader: 'varying vec3 vN; varying vec3 vV; void main() { float f = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 5.0); gl_FragColor = vec4(vec3(0.5, 0.72, 0.8), f * 0.5); }',
+  }));
 glass.position.y = (TOP + 0.4) / 2 - 0.3; scene.add(glass);
 const glassEdges = new THREE.LineSegments(new THREE.EdgesGeometry(glass.geometry),
-  new THREE.LineBasicMaterial({ color: 0x9fdcec, transparent: true, opacity: 0.35, fog: false }));
+  new THREE.LineBasicMaterial({ color: 0x6fb6c8, transparent: true, opacity: 0.14, fog: false }));
 glassEdges.position.copy(glass.position); scene.add(glassEdges);
 function gradientTex(stops, h = 256) {
   const c = document.createElement('canvas'); c.width = 4; c.height = h;
@@ -1099,7 +1104,7 @@ const back = new THREE.Mesh(new THREE.PlaneGeometry(W, TOP + 0.2), backMat);
 back.position.set(0, (TOP + 0.2) / 2 - 0.25, -D / 2 + 0.02); scene.add(back);
 const waterGeo = new THREE.PlaneGeometry(W - 0.1, D - 0.1, 80, 40);
 waterGeo.rotateX(-Math.PI / 2);
-const waterMat = new THREE.MeshPhysicalMaterial({ color: 0x8fe3ff, transparent: true, opacity: 0.4, roughness: 0.04, clearcoat: 1, envMapIntensity: 2.2, flatShading: true, side: THREE.DoubleSide, depthWrite: false });
+const waterMat = new THREE.MeshPhysicalMaterial({ color: 0x8fe3ff, transparent: true, opacity: 0.22, roughness: 0.04, clearcoat: 0.6, envMapIntensity: 1.1, flatShading: true, side: THREE.DoubleSide, depthWrite: false });
 const water = new THREE.Mesh(waterGeo, waterMat); water.position.y = WATER; scene.add(water);
 const waterBase = waterGeo.attributes.position.array.slice();
 // suspended particles

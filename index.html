@@ -1771,7 +1771,7 @@ el.addEventListener('pointermove', (e) => {
   p.x = e.clientX; p.y = e.clientY;
   if (ptrs.size === 1) {
     if (p.pan) pan(dx, dy);
-    else { cam.theta -= dx * 0.005; cam.phi = clamp(cam.phi + dy * 0.004, -1.2, 1.45); }
+    else { cam.theta += dx * 0.005; cam.phi = clamp(cam.phi - dy * 0.004, -1.2, 1.45); }
     moved += Math.abs(dx) + Math.abs(dy);
   } else if (ptrs.size === 2) {
     const m = mid();

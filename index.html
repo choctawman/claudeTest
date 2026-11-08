@@ -15,6 +15,7 @@
   --accent: #ff8a3d;
   --actinic: #7c86ff;
   --kelp: #5fd18a;
+  --coral: #ff6fb0;
   --font-display: "Silkscreen", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --font-ui: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
   color-scheme: dark;
@@ -39,6 +40,13 @@ body {
   pointer-events: none;
 }
 #loading[hidden] { display: none; }
+#labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+#labels[hidden] { display: none; }
+.tag {
+  position: absolute; left: 0; top: 0;
+  font: 600 11px/1 var(--font-ui); color: var(--fg); white-space: nowrap;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px;
+}
 .hud {
   position: fixed; inset: 0;
   pointer-events: none;
@@ -128,6 +136,7 @@ h1 span { color: var(--accent); }
 </style>
 
 <div id="scene"></div>
+<div id="labels" aria-hidden="true"></div>
 <div id="loading">Filling the tank…</div>
 
 <div class="hud">
@@ -156,10 +165,11 @@ h1 span { color: var(--accent); }
     <nav class="controls" aria-label="Tank controls">
       <button id="b-feed" class="btn" type="button"><span class="vox" style="--c: var(--accent)"></span>Feed</button>
       <button id="b-light" class="btn" type="button" aria-pressed="false"><span class="vox" style="--c: var(--actinic)"></span><span id="b-light-label">Daylight</span></button>
+      <button id="b-labels" class="btn" type="button" aria-pressed="false"><span class="vox" style="--c: var(--coral)"></span>Coral names</button>
       <button id="b-add" class="btn" type="button"><span class="vox" style="--c: var(--kelp)"></span>Add fish</button>
       <button id="b-drift" class="btn" type="button" aria-pressed="true"><span class="vox" style="--c: var(--muted)"></span>Drift camera</button>
     </nav>
-    <p class="hint">Drag to look around · Scroll or pinch to zoom · Tap the water to feed · Tap a fish to identify it</p>
+    <p class="hint">Drag to look around · Scroll or pinch to zoom · Tap the water to feed · Tap a fish or coral to identify it</p>
   </div>
 </div>
 
@@ -299,9 +309,9 @@ float causticF(vec2 uv, float time) {
   c /= 4.0; c = 1.17 - pow(c, 1.4);
   return clamp(pow(abs(c), 8.0), 0.0, 1.0);
 }`;
-function reefMat({ sway = 0, glow = 0, caustic = 0.6, roughness = 0.85 } = {}) {
+function reefMat({ sway = 0, glow = 0, caustic = 0.6, roughness = 0.85, scale = G } = {}) {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness: 0 });
-  const u = { uTime: U.uTime, uNight: U.uNight, uSway: { value: sway }, uGlow: { value: glow }, uCaus: { value: caustic }, uScale: { value: G } };
+  const u = { uTime: U.uTime, uNight: U.uNight, uSway: { value: sway }, uGlow: { value: glow }, uCaus: { value: caustic }, uScale: { value: scale } };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
@@ -362,7 +372,7 @@ function sandColor(ix, iy, iz, h) {
   const wx = ix * G, wz = iz * G, hs = hash3(ix, iy, iz);
   if (iy >= h - 2) {
     const rip = Math.sin(wx * 2.4 + wz * 0.9 + noise3(wx * 0.5, 3, wz * 0.5) * 4);
-    let c = shade(0xc8b184, (0.92 + rip * 0.06) * (iy === h - 1 ? 1 : 0.95));
+    let c = shade(0xb8a077, (0.92 + rip * 0.06) * (iy === h - 1 ? 1 : 0.95));
     if (hs < 0.05) c = 0xbfa77c; else if (hs < 0.09) c = 0xf0e2bf; else if (hs < 0.094) c = 0xf7ece6;
     else if (hs < 0.097) c = 0xe9a99c; else if (hs < 0.1) c = 0x77706a;
     return jit(c, 0.025);
@@ -413,13 +423,11 @@ for (const v of STATIC.m.values()) {
   const [x, y, z] = v, px = x * G, py = y * G, pz = z * G;
   const top = !STATIC.has(x, y + 1, z);
   const n = noise3(px * 0.6 + 10, py * 0.6, pz * 0.6), n2 = noise3(px * 2.5, py * 2.5, pz * 2.5), h = hash3(x, y, z);
-  let c = mixHex(0x766e66, 0x9f9588, h);
-  if (n > 0.62) c = mixHex(0x8f3f8a, 0xc46aa8, n2);
-  else if (n > 0.56) c = mixHex(0xc06f9f, 0xe39bc4, n2);
-  else if (n < 0.26) c = mixHex(0x52703c, 0x86a35a, n2);
-  if (top && n2 > 0.78) c = 0xe9a8c8;
-  if (h < 0.008) c = [0xff8a2a, 0xffd23a, 0xd8322a, 0x7a4fe0][Math.floor(h * 500) % 4];
-  else if (h > 0.975) c = 0x4f4842;
+  let c = mixHex(0x766e66, 0x9a9085, h);
+  if (n > 0.66) c = mixHex(0x86607f, 0xa27f9a, n2);
+  else if (n < 0.22) c = mixHex(0x66735a, 0x7f8a66, n2);
+  if (top && n2 > 0.82) c = shade(c, 1.12);
+  if (h > 0.975) c = 0x4f4842;
   v[3] = jit(c, 0.04);
 }
 
@@ -470,117 +478,41 @@ for (let k = 0; k < 26; k++) {
   STATIC.set(ix, topAt(ix, iz) + 1, iz, jit([0xd9d4c8, 0xc8b897, 0x8a837a, 0xf2c3b5][RI(0, 3)], 0.06));
 }
 
-// ---------- corals (static, glow under actinic light) ----------
-const putC = (x, y, z, c) => { if (inside(x, z) && y > 0) CORAL.set(x, y, z, c, 2); };
-function staghorn(wx, wz, base, tip, depth = 3) {
-  const x0 = gr(wx), z0 = gr(wz), y0 = topAt(x0, z0);
-  function br(x, y, z, dx, dy, dz, len, d) {
-    const steps = Math.round(len / 0.5);
-    for (let i = 0; i < steps; i++) {
-      x += dx * 0.5; y += dy * 0.5; z += dz * 0.5;
-      const isTip = d === 0 && i >= steps - 4;
-      const c = isTip ? jit(tip, 0.05) : jit(mixHex(base, tip, 0.15 * (3 - d) / 3), 0.06);
-      const ix = Math.round(x), iy = Math.round(y), iz = Math.round(z);
-      putC(ix, iy, iz, c);
-      if (!isTip && d > 0) { putC(ix + 1, iy, iz, c); putC(ix, iy, iz + 1, c); putC(ix + 1, iy, iz + 1, c); }
-      if (!isTip && hash3(ix, iy, iz) < 0.14) putC(ix + (hash3(iz, ix, iy) < 0.5 ? -1 : 2), iy, iz, jit(tip, 0.08));
-    }
-    if (d > 0) {
-      const n = 2 + (rand() < 0.45 ? 1 : 0);
-      for (let k = 0; k < n; k++) {
-        const v = new V3(dx + R(-0.9, 0.9), dy + R(0.1, 0.7), dz + R(-0.9, 0.9)).normalize();
-        br(x, y, z, v.x, v.y, v.z, len * R(0.6, 0.85), d - 1);
-      }
-    }
-  }
-  for (let k = 0; k < 3; k++) {
-    const v = new V3(R(-0.5, 0.5), 1, R(-0.5, 0.5)).normalize();
-    br(x0, y0, z0, v.x, v.y, v.z, R(8, 12), depth);
-  }
-}
-function brain(wx, wz, wr, c1, c2) {
-  const x0 = gr(wx), z0 = gr(wz), y0 = topAt(x0, z0), r = wr / G;
-  for (let x = -r; x <= r; x++) for (let z = -r; z <= r; z++) for (let y = 0; y <= r; y++) {
-    const dist = Math.sqrt(x * x + z * z + (y * 1.25) ** 2);
-    if (dist > r) continue;
-    const gx = x0 + x, gz = z0 + z, px = gx * G, pz = gz * G;
-    const groove = Math.sin(px * 4.4 + Math.sin(pz * 2.8) * 2) * Math.cos(pz * 4.4 + Math.sin(px * 2.4) * 2);
-    if (dist > r - 1.3 && groove < -0.3) continue;
-    putC(gx, y0 + 1 + y, gz, jit(groove > 0.55 ? shade(c1, 1.12) : groove > 0.05 ? c1 : c2, 0.04));
-  }
-}
-function tableCoral(wx, wz, wr, c, rim) {
-  const x0 = gr(wx), z0 = gr(wz), y0 = topAt(x0, z0) + 1, r = wr / G;
-  for (let y = 0; y < 8; y++) for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) putC(x0 + a, y0 + y, z0 + b, jit(shade(c, 0.75), 0.05));
-  for (let x = -r; x <= r; x++) for (let z = -r; z <= r; z++) {
-    const d = Math.sqrt(x * x + z * z);
-    if (d > r) continue;
-    const ang = Math.atan2(z, x), edge = d > r - 2;
-    const base = shade(edge ? rim : c, 0.92 + 0.08 * Math.sin(ang * 20));
-    putC(x0 + x, y0 + 8 + (edge ? 1 : 0), z0 + z, jit(hash3(x, 5, z) < 0.15 ? shade(base, 1.15) : base, 0.04));
-    if (d < r * 0.5) putC(x0 + x, y0 + 7, z0 + z, jit(shade(c, 0.8), 0.04));
-  }
-}
-function zoanthids(count) {
-  const pal = [[0x7dff6a, 0xff7b3a], [0x3cf0e0, 0xff4fa0], [0xffe14d, 0x6a3cff], [0xff5fd0, 0x52ffb8], [0x9a7bff, 0xfff27a], [0xff9a3c, 0x2ad1ff]];
-  let placed = 0, tries = 0;
-  while (placed < count && tries++ < 3000) {
-    const ix = RI(-IX + 4, IX - 4), iz = RI(-IZ + 4, 4);
-    if (!onRock(ix, iz)) continue;
-    const [a, b] = pal[RI(0, pal.length - 1)], r = RI(3, 5);
-    for (let x = -r; x <= r; x++) for (let z = -r; z <= r; z++) {
-      if (x * x + z * z > r * r + 0.5) continue;
-      const t = topAt(ix + x, iz + z);
-      if (t < 0 || CORAL.has(ix + x, t + 1, iz + z)) continue;
-      putC(ix + x, t + 1, iz + z, shade(b, 0.85));
-      if (((ix + x) & 1) === 0 && ((iz + z) & 1) === 0) putC(ix + x, t + 2, iz + z, a);
-    }
-    placed++;
-  }
-}
-function mushrooms(count) {
-  const pal = [[0x3dbb77, 0x1f6f4a], [0xd2442f, 0xffb08a], [0x6a4fd8, 0x9fe0ff], [0x2fb3c9, 0xc7ff8a]];
-  let placed = 0, tries = 0;
-  while (placed < count && tries++ < 3000) {
-    const ix = RI(-IX + 4, IX - 4), iz = RI(-IZ + 4, 6);
-    if (!onRock(ix, iz)) continue;
-    const [a, sp] = pal[RI(0, pal.length - 1)], r = RI(3, 5), t = topAt(ix, iz);
-    for (let x = -r; x <= r; x++) for (let z = -r; z <= r; z++) {
-      const d = Math.sqrt(x * x + z * z); if (d > r) continue;
-      const ang = Math.atan2(z, x);
-      let c = shade(a, Math.sin(ang * 10) > 0.7 ? 0.85 : 1);
-      if (hash3(ix + x, 3, iz + z) < 0.18) c = sp;
-      if (d < 0.8) c = shade(a, 0.5);
-      putC(ix + x, t + 1 + (d < 1.6 ? 1 : 0), iz + z, c);
-    }
-    placed++;
-  }
-}
-function pillar(wx, wz) {
-  const x0 = gr(wx), z0 = gr(wz);
-  for (let k = 0; k < 6; k++) {
-    const cx = x0 + RI(-4, 4), cz = z0 + RI(-3, 3), H = RI(14, 28), y0 = topAt(cx, cz) + 1;
-    for (let y = 0; y < H; y++) {
-      const rr = y > H - 3 ? 1.0 : 1.7;
-      for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) {
-        const d = Math.sqrt(x * x + z * z); if (d > rr) continue;
-        putC(cx + x, y0 + y, cz + z, jit(0xc7ad78, 0.06));
-        if (d > rr - 1 && hash3(cx + x, y0 + y, cz + z) < 0.22) putC(cx + x + Math.sign(x), y0 + y, cz + z + Math.sign(z), jit(0xeadcb4, 0.05));
-      }
-    }
-  }
-}
-function sponges(wx, wz, col) {
-  const x0 = gr(wx), z0 = gr(wz);
-  for (let k = 0; k < 4; k++) {
-    const cx = x0 + RI(-5, 5), cz = z0 + RI(-3, 3), r = R(1.8, 2.8), H = RI(6, 16), y0 = topAt(cx, cz) + 1;
-    for (let y = 0; y < H; y++) for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) {
-      const d = Math.sqrt(x * x + z * z);
-      if (d > r + (y < 2 ? 0.6 : 0) || d < r - 1.2) continue;
-      putC(cx + x, y0 + y, cz + z, jit(y >= H - 1 ? shade(col, 1.25) : col, 0.06));
-    }
-  }
-}
+// ---------- names and facts ----------
+const INFO = {
+  elkhorn: { name: 'Elkhorn coral', sci: 'Acropora palmata', swatch: '#c98a45', fact: "Grows broad, flattened branches like a moose's antlers. It once built much of the Caribbean's shallow reef crest and is now critically endangered." },
+  table: { name: 'Table coral', sci: 'Acropora hyacinthus', swatch: '#6fa47e', fact: 'Spreads into a flat plate on a single stalk, shading the reef below. Fine upright branchlets cover its top surface.' },
+  staghorn: { name: 'Staghorn coral', sci: 'Acropora cervicornis', swatch: '#c49a55', fact: 'One of the fastest-growing corals, adding 10 to 20 cm a year. Broken branches can reattach and start new colonies.' },
+  birdsnest: { name: "Bird's nest coral", sci: 'Seriatopora hystrix', swatch: '#f08fb8', fact: 'Forms a dense tangle of thin, pointed branches. Small crabs and fish shelter between them.' },
+  montiCap: { name: 'Plating montipora', sci: 'Montipora capricornis', swatch: '#4a7fd0', fact: "Grows in whorled plates that spiral outward like a goat's horn, which gives the species its name." },
+  seaFan: { name: 'Common sea fan', sci: 'Gorgonia ventalina', swatch: '#9a52d8', fact: 'A soft coral that grows in one flat plane across the current and filters plankton through its mesh of branches.' },
+  pillar: { name: 'Pillar coral', sci: 'Dendrogyra cylindrus', swatch: '#c8ad78', fact: 'Grows upright columns that can reach 3 m. Unlike most corals, its polyps stay out during the day, which gives it a fuzzy look.' },
+  toadstool: { name: 'Toadstool leather coral', sci: 'Sarcophyton sp.', swatch: '#d9c28a', fact: 'A soft coral with no stony skeleton. Every few weeks it pulls in its polyps and sheds a waxy skin to clean itself.' },
+  hammer: { name: 'Hammer coral', sci: 'Fimbriaphyllia ancora', swatch: '#8fe05a', fact: 'Named for the hammer- or anchor-shaped tips of its tentacles. Long sweeper tentacles can sting corals growing too close.' },
+  torch: { name: 'Torch coral', sci: 'Euphyllia glabrescens', swatch: '#ffe14a', fact: 'Long, flowing tentacles end in rounded tips. In aquariums, clownfish sometimes adopt it as a host when no anemone is available.' },
+  bubble: { name: 'Bubble coral', sci: 'Plerogyra sinuosa', swatch: '#efe8d4', fact: 'Inflates water-filled vesicles by day to catch light, then deflates them at night and extends feeding tentacles.' },
+  brain: { name: 'Grooved brain coral', sci: 'Diploria labyrinthiformis', swatch: '#dab45a', fact: 'Its ridges and valleys meander like a brain. A groove runs along the top of each ridge, which sets it apart from other brain corals.' },
+  openBrain: { name: 'Open brain coral', sci: 'Trachyphyllia geoffroyi', swatch: '#c02a3a', fact: 'Lives loose on sand and silt rather than rock. Its fleshy body can swell with water to lift itself clear of sediment.' },
+  fungia: { name: 'Mushroom coral', sci: 'Fungia fungites', swatch: '#b47ad0', fact: 'A single large polyp that is not attached to the reef. It can right itself if flipped over and slowly move across the sand.' },
+  duncan: { name: 'Duncan coral', sci: 'Duncanopsammia axifuga', swatch: '#5cc46a', fact: 'Each tube ends in one polyp with a green disc and short tentacles. New heads bud from the sides of older tubes.' },
+  gsp: { name: 'Green star polyps', sci: 'Briareum violaceum', swatch: '#5fd86a', fact: 'Bright green polyps rise from a purple mat that creeps across rock. The whole colony pulls in when disturbed.' },
+  zoa: { name: 'Zoanthids', sci: 'Zoanthus sp.', swatch: '#ff8a1a', fact: 'Colonial polyps joined by a shared mat, in many colour forms. Some contain palytoxin, so aquarists handle them with gloves.' },
+  clam: { name: 'Maxima clam', sci: 'Tridacna maxima', swatch: '#2f62d0', fact: 'Algae living in its mantle turn light into food for the clam. Mantle colours and patterns vary widely between individuals.' },
+  anemone: { name: 'Bubble-tip anemone', sci: 'Entacmaea quadricolor', swatch: '#ff5f95', fact: 'The host anemone for many clownfish species. Its tentacles often swell into bulbs at the tips.' },
+  duster: { name: 'Feather duster worm', sci: 'Sabellastarte spectabilis', swatch: '#b5506e', fact: 'A segmented worm that lives in a tube it builds. It filters food with its feathery crown and snaps back into the tube when startled.' },
+  caulerpa: { name: 'Caulerpa macroalgae', sci: 'Caulerpa prolifera', swatch: '#3c9e3a', fact: 'Each plant is a single giant cell with many nuclei, even though its blades can grow to 30 cm long.' },
+  sponge: { name: 'Yellow tube sponge', sci: 'Aplysina fistularis', swatch: '#f2c430', fact: 'An animal with no organs. It pumps water in through pores in its walls and out through the opening at the top.' },
+  clown: { name: 'Ocellaris clownfish', sci: 'Amphiprion ocellaris', swatch: '#ff7a1a', fact: 'Lives among the tentacles of a host anemone. A mucus coat keeps the anemone from stinging it.' },
+  blueTang: { name: 'Blue tang', sci: 'Paracanthurus hepatus', swatch: '#2a5cf0', fact: 'Has a sharp, scalpel-like spine at the base of its tail that it raises when threatened.' },
+  yellowTang: { name: 'Yellow tang', sci: 'Zebrasoma flavescens', swatch: '#ffd400', fact: 'Grazes on algae for most of the day. The white spine near its tail marks it as a surgeonfish.' },
+  gramma: { name: 'Royal gramma', sci: 'Gramma loreto', swatch: '#c33ad8', fact: 'Often swims upside down under rock ledges, keeping its belly toward the nearest surface.' },
+  chromis: { name: 'Green chromis', sci: 'Chromis viridis', swatch: '#8ff0d0', fact: 'Lives in schools above branching coral and dives between the branches when threatened.' },
+  goby: { name: 'Yellow watchman goby', sci: 'Cryptocentrus cinctus', swatch: '#ffcf1a', fact: 'Shares a sand burrow with a pistol shrimp. The goby keeps watch at the entrance, and when it flicks its tail or darts inside, the shrimp retreats too.' },
+  shrimp: { name: 'Tiger pistol shrimp', sci: 'Alpheus bellulus', swatch: '#b8642e', fact: 'Digs and maintains the burrow it shares with the goby, and keeps an antenna on the fish while it works. Its large claw snaps shut fast enough to form a bubble that collapses with a loud crack.' },
+  crab: { name: 'Scarlet reef hermit crab', sci: 'Paguristes cadenati', swatch: '#d8321e', fact: 'Moves into a larger empty shell as it grows. It picks algae and leftover food off the sand.' },
+};
+
+// ---------- reef residents: real coral species, each a fine-voxel model ----------
 function starfish(wx, wz, c, dot) {
   const x0 = gr(wx), z0 = gr(wz), y = topAt(x0, z0) + 1, rot = R(0, Math.PI);
   for (let k = 0; k < 5; k++) {
@@ -594,74 +526,473 @@ function starfish(wx, wz, c, dot) {
       }
     }
   }
+  for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) STATIC.set(x0 + x, y, z0 + z, jit(c, 0.05));
 }
 function airstone(wx, wz) {
   const x0 = gr(wx), z0 = gr(wz), y = topAt(x0, z0) + 1;
   for (let x = 0; x < 4; x++) for (let z = 0; z < 4; z++) for (let h = 0; h < 2; h++) STATIC.set(x0 + x, y + h, z0 + z, jit(0x4b5a63, 0.05));
   return new V3((x0 + 1.5) * G, (y + 2) * G, (z0 + 1.5) * G);
 }
-
-staghorn(-10, -4.5, 0xc86fb5, 0xffb6f0);
-staghorn(11, -3.5, 0xd28a4a, 0x9bf3ff);
-staghorn(8.3, 1.2, 0x7a5bd6, 0xd8c4ff, 2);
-brain(-13.5, -1.5, 2, 0x8fc15a, 0x5e7f3a);
-brain(2.6, -3.3, 1.5, 0xd98a5f, 0xa3573a);
-tableCoral(12, -6, 3, 0x45b4b0, 0x9ef5e6);
-tableCoral(-7.5, -6, 2.5, 0x6a8fe0, 0xc8dcff);
-pillar(16.2, -0.6);
-sponges(-16, -6.5, 0xff7a2a);
-sponges(5.5, -8, 0x9a4fe0);
-zoanthids(26);
-mushrooms(9);
 starfish(-10, 5.2, 0xe8532a, 0xffd29a);
 starfish(11, 7, 0x2f6fe0, 0x9fc4ff);
 const BUBBLE_SOURCES = [airstone(18, -6.5), airstone(-14, -8.5)];
 
-// combined height map (sand + rock + coral) for fish and food
+// height map (sand + rock) for fish and food; corals add to it as they are placed
 const heightAll = new Int16Array((2 * IX + 1) * (2 * IZ + 1));
 for (let ix = -IX; ix <= IX; ix++) for (let iz = -IZ; iz <= IZ; iz++) {
-  let t = -1;
-  for (let y = 80; y >= 0; y--) if (STATIC.has(ix, y, iz) || CORAL.has(ix, y, iz)) { t = y; break; }
+  let t = topAt(ix, iz);
   if (t < 0) t = sandTop[colIdx(ix, iz)] - EXPL - 1;
   heightAll[colIdx(ix, iz)] = t;
 }
+const FISHSOLID = new Set();
+const fkey = (x, y, z) => ((x + 512) * 1024 + (y + 512)) * 1024 + (z + 512);
 function floorY(x, z) {
   const ix = Math.max(-IX, Math.min(IX, Math.round(x / G))), iz = Math.max(-IZ, Math.min(IZ, Math.round(z / G)));
   return (heightAll[colIdx(ix, iz)] + 0.5) * G;
 }
 function solidAt(v) {
   const ix = Math.round(v.x / G), iy = Math.round(v.y / G), iz = Math.round(v.z / G);
-  return STATIC.has(ix, iy, iz) || CORAL.has(ix, iy, iz);
+  return STATIC.has(ix, iy, iz) || FISHSOLID.has(fkey(ix, iy, iz));
 }
+function topWorld(wx, wz) { return (topAt(gr(wx), gr(wz)) + 0.5) * G; }
 
 const staticMesh = new THREE.Mesh(buildGeo(STATIC, solid), reefMat({ caustic: 0.45 }));
 staticMesh.scale.setScalar(G);
 staticMesh.receiveShadow = true; staticMesh.castShadow = true;
-const coralMesh = new THREE.Mesh(buildGeo(CORAL, solid), reefMat({ caustic: 0.55, glow: 0.55, roughness: 0.7 }));
-coralMesh.scale.setScalar(G);
-coralMesh.receiveShadow = true; coralMesh.castShadow = true;
-scene.add(staticMesh, coralMesh);
+scene.add(staticMesh);
 
-// ---- swaying life: macroalgae, sea fans, anemone, torch coral, feather dusters ----
-const kelpMat = reefMat({ sway: 1.0, glow: 0.12, caustic: 0.4 });
-const fanMat = reefMat({ sway: 0.35, glow: 0.4, caustic: 0.35 });
-const anemMat = reefMat({ sway: 2.2, glow: 0.85, caustic: 0.35, roughness: 0.6 });
-const torchMat = reefMat({ sway: 1.6, glow: 0.9, caustic: 0.35, roughness: 0.6 });
-const dusterMat = reefMat({ sway: 0.7, glow: 0.4, caustic: 0.3 });
-function placeLocal(vs, mat, wx, wz, rotY = 0) {
-  const ix = gr(wx), iz = gr(wz), ty = topAt(ix, iz);
-  const m = new THREE.Mesh(buildGeo(vs), mat);
-  m.scale.setScalar(G);
-  m.position.set(ix * G, (ty + 1) * G, iz * G);
-  m.rotation.y = rotY;
-  m.castShadow = true; m.receiveShadow = true;
-  scene.add(m);
-  return m;
+const CV = 0.1; // world size of one coral voxel
+const MAT = {
+  stony: reefMat({ scale: CV, glow: 0.6, caustic: 0.5, roughness: 0.7 }),
+  soft: reefMat({ scale: CV, sway: 0.35, glow: 0.55, caustic: 0.4, roughness: 0.75 }),
+  tentacle: reefMat({ scale: CV, sway: 1.5, glow: 0.95, caustic: 0.3, roughness: 0.55 }),
+  fan: reefMat({ scale: CV, sway: 0.35, glow: 0.45, caustic: 0.35 }),
+  polyp: reefMat({ scale: CV, sway: 0.9, glow: 1.1, caustic: 0.3, roughness: 0.6 }),
+  zoa: reefMat({ scale: CV, glow: 1.15, caustic: 0.3, roughness: 0.6 }),
+  anemone: reefMat({ scale: CV, sway: 1.9, glow: 0.9, caustic: 0.3, roughness: 0.55 }),
+  duster: reefMat({ scale: CV, sway: 0.7, glow: 0.4, caustic: 0.3 }),
+  clam: reefMat({ scale: CV, glow: 0.8, caustic: 0.4, roughness: 0.4 }),
+  sponge: reefMat({ scale: CV, glow: 0.3, caustic: 0.4 }),
+};
+const pickables = [], LABELS = [];
+
+function stamp(vs, cx, cy, cz, r, colFn, sy = 1) {
+  cx = Math.round(cx); cy = Math.round(cy); cz = Math.round(cz);
+  const rx = Math.ceil(r), ry = Math.ceil(r * sy);
+  for (let x = -rx; x <= rx; x++) for (let z = -rx; z <= rx; z++) for (let y = -ry; y <= ry; y++) {
+    if ((x * x + z * z) / (r * r) + (y * y) / ((r * sy) ** 2) > 1) continue;
+    vs.set(cx + x, cy + y, cz + z, colFn(cx + x, cy + y, cz + z));
+  }
 }
-function kelp(wx, wz, blades, hMin, hMax) {
+function placeCoral(key, wx, wz, build, mat, { rotY = R(0, Math.PI * 2), solid = true, sink = 0.08, label = true } = {}) {
+  const baseY = topWorld(wx, wz) - sink;
+  const c = Math.cos(rotY), s = Math.sin(rotY);
+  const ctx = { surf: (lx, lz) => Math.round((topWorld(wx + (lx * c + lz * s) * CV, wz + (-lx * s + lz * c) * CV) - baseY) / CV) };
+  const vs = build(ctx);
+  const mesh = new THREE.Mesh(buildGeo(vs), mat);
+  mesh.scale.setScalar(CV);
+  mesh.position.set(wx, baseY, wz);
+  mesh.rotation.y = rotY;
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  scene.add(mesh);
+  let maxY = 0;
+  for (const [x, y, z] of vs.m.values()) {
+    if (y > maxY) maxY = y;
+    if (!solid) continue;
+    const ix = gr(wx + (x * c + z * s) * CV), iy = gr(baseY + y * CV), iz = gr(wz + (-x * s + z * c) * CV);
+    if (!inside(ix, iz)) continue;
+    FISHSOLID.add(fkey(ix, iy, iz));
+    const ci = colIdx(ix, iz);
+    if (iy > heightAll[ci]) heightAll[ci] = iy;
+  }
+  const obj = { info: INFO[key], pos: new V3(wx, baseY + maxY * CV + 0.1, wz), mesh };
+  mesh.userData.pick = obj; pickables.push(mesh);
+  if (label) LABELS.push(obj);
+  return obj;
+}
+// conforming mat over uneven rock; fn(vs, x, h, z) adds the polyps
+function matLayer(ctx, r, base, fn) {
   const vs = new VSet();
+  for (let x = -r - 3; x <= r + 3; x++) for (let z = -r - 3; z <= r + 3; z++) {
+    const d = Math.hypot(x, z) + (noise3(x * 0.2, 1, z * 0.2) - 0.5) * 6;
+    if (d > r) continue;
+    const h = ctx.surf(x, z);
+    for (let y = h - 3; y <= h; y++) vs.set(x, y, z, jit(shade(base, y === h ? 1 : 0.8), 0.05));
+    fn(vs, x, h, z, d / r);
+  }
+  return vs;
+}
+
+// Elkhorn: broad, flattened antler-like branches
+function bElkhorn() {
+  const vs = new VSet();
+  const col = (x, y, z, k) => { const h = hash3(x, y, z); let c = mixHex(0xb06d2c, 0xe8bb78, k); if (h < 0.12) c = shade(c, 1.2); else if (h > 0.93) c = shade(c, 0.82); return c; };
+  for (let y = -4; y < 6; y++) stamp(vs, 0, y, 0, 4.6 - y * 0.15, (x, yy, z) => col(x, yy, z, 0));
+  function paddle(x, y, z, ang, up, len, w, d) {
+    const steps = Math.round(len / 1.2);
+    for (let i = 0; i < steps; i++) {
+      x += Math.cos(ang) * 1.2; z += Math.sin(ang) * 1.2; y += up * 1.2;
+      const k = i / steps;
+      stamp(vs, x, y, z, w * (0.75 + 0.45 * k), (a, b, cc) => col(a, b, cc, d === 0 ? k * 0.85 : 0.1), 0.3);
+    }
+    if (d > 0) {
+      const n = 2 + (rand() < 0.4 ? 1 : 0);
+      for (let k = 0; k < n; k++) paddle(x, y, z, ang + R(-0.75, 0.75), Math.max(0.1, up * R(0.6, 1.3)), len * R(0.55, 0.75), w * 0.8, d - 1);
+    }
+  }
+  for (let k = 0; k < 5; k++) paddle(0, 5, 0, k * Math.PI * 2 / 5 + R(-0.3, 0.3), R(0.2, 0.45), R(13, 16), 4.4, 2);
+  return vs;
+}
+// Table coral: a flat plate on one stalk, branchlets on top
+function bTable() {
+  const vs = new VSet(), Rr = 30;
+  for (let y = -4; y < 11; y++) stamp(vs, 0, y, 0, 2.8 + Math.max(0, 3 - y) * 0.3, () => jit(0x6c7f5a, 0.05));
+  for (let x = -Rr; x <= Rr; x++) for (let z = -Rr; z <= Rr; z++) {
+    const r = Math.hypot(x, z); if (r > Rr) continue;
+    const ang = Math.atan2(z, x), y = 11 + Math.round(r * 0.12);
+    const rim = r > Rr - 2;
+    const c = rim ? 0xa8ead0 : shade(mixHex(0x5c8c68, 0x8cc29a, r / Rr), 0.92 + 0.08 * Math.sin(ang * 36));
+    vs.set(x, y, z, jit(c, 0.03));
+    if (r < Rr - 1) vs.set(x, y - 1, z, jit(0x55745a, 0.04));
+    if (!rim && x % 2 === 0 && z % 2 === 0 && hash3(x, 9, z) < 0.7) {
+      vs.set(x, y + 1, z, jit(0x9fd2a8, 0.04));
+      if (hash3(x, 10, z) < 0.35) vs.set(x, y + 2, z, 0xdcf7e0);
+    }
+  }
+  return vs;
+}
+// Staghorn: long round branches with pale growing tips
+function bStaghorn() {
+  const vs = new VSet();
+  function br(x, y, z, d, len, depth) {
+    const steps = Math.round(len / 0.6);
+    for (let i = 0; i < steps; i++) {
+      x += d.x * 0.6; y += d.y * 0.6; z += d.z * 0.6;
+      const tip = depth === 0 && i >= steps - 4;
+      stamp(vs, x, y, z, tip ? 1.1 : 1.45, (a, b, c) => tip ? 0xf6efe0 : jit(0xc49a55, 0.06));
+      if (!tip && hash3(Math.round(x), Math.round(y), Math.round(z)) < 0.25) vs.set(Math.round(x) + 2, Math.round(y), Math.round(z), 0xe9d3a3);
+    }
+    if (depth > 0) {
+      const n = rand() < 0.55 ? 2 : 1;
+      for (let k = 0; k < n; k++) br(x, y, z, d.clone().add(new V3(R(-0.8, 0.8), R(-0.1, 0.5), R(-0.8, 0.8))).normalize(), len * R(0.6, 0.8), depth - 1);
+    }
+  }
+  stamp(vs, 0, -1, 0, 3, () => jit(0xb08a4c, 0.05));
+  for (let k = 0; k < 4; k++) br(0, 0, 0, new V3(R(-0.8, 0.8), R(0.5, 1), R(-0.8, 0.8)).normalize(), R(13, 18), 3);
+  return vs;
+}
+// Bird's nest: dense tangle of thin pointed pink branches
+function bBirdsnest() {
+  const vs = new VSet();
+  stamp(vs, 0, -1, 0, 3, () => jit(0xc76a92, 0.05));
+  function br(x, y, z, d, len, depth) {
+    const steps = Math.round(len / 0.6);
+    for (let i = 0; i < steps; i++) {
+      x += d.x * 0.6; y += d.y * 0.6; z += d.z * 0.6;
+      const tip = depth === 0 && i >= steps - 2;
+      vs.set(Math.round(x), Math.round(y), Math.round(z), tip ? 0xffd6e8 : jit(mixHex(0xc85a86, 0xf08fb8, (4 - depth) / 4), 0.05));
+    }
+    if (depth > 0) for (let k = 0; k < 2 + (rand() < 0.5 ? 1 : 0); k++) br(x, y, z, d.clone().add(new V3(R(-0.9, 0.9), R(-0.1, 0.6), R(-0.9, 0.9))).normalize(), len * R(0.75, 0.95), depth - 1);
+  }
+  for (let k = 0; k < 9; k++) br(0, 1, 0, new V3(R(-0.8, 0.8), R(0.5, 1), R(-0.8, 0.8)).normalize(), R(6, 8), 4);
+  return vs;
+}
+// Montipora capricornis: whorled plates spiralling upward
+function bMontiCap() {
+  const vs = new VSet();
+  for (let y = -4; y < 6; y++) stamp(vs, 0, y, 0, 2, () => jit(0x3c6aa8, 0.05));
+  for (let k = 0; k < 7; k++) {
+    const a0 = k * 1.15, span = 3.6, Rk = 10 + k * 2, yb = 2 + k * 3.5;
+    for (let x = -Rk; x <= Rk; x++) for (let z = -Rk; z <= Rk; z++) {
+      const r = Math.hypot(x, z); if (r > Rk || r < 1.5) continue;
+      const da = ((Math.atan2(z, x) - a0) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+      if (da > span) continue;
+      const y = yb + Math.round(r * 0.35 + da * 0.8);
+      const rim = r > Rk - 1.5 || da > span - 0.12;
+      let c = rim ? 0xd2c2ff : shade(0x4a7fd0, 0.92 + 0.08 * Math.sin(r * 1.5));
+      if (!rim && hash3(x, y, z) < 0.1) c = 0xe0ecff;
+      vs.set(x, y, z, jit(c, 0.03));
+    }
+  }
+  return vs;
+}
+// Pillar coral: upright columns, fuzzy with daytime polyps
+function bPillar() {
+  const vs = new VSet();
+  for (let k = 0; k < 5; k++) {
+    const cx = k === 0 ? 0 : RI(-7, 7), cz = k === 0 ? 0 : RI(-6, 6), rr = R(3, 4.2), H = RI(28, 55);
+    for (let y = -4; y <= H; y++) {
+      const rad = y > H - 2 ? rr - 1.4 : rr;
+      for (let x = -5; x <= 5; x++) for (let z = -5; z <= 5; z++) {
+        const d = Math.hypot(x, z); if (d > rad) continue;
+        vs.set(cx + x, y, cz + z, jit(0xb6955f, 0.05));
+        const h = hash3(cx + x, y, cz + z);
+        if ((d > rad - 1 || y >= H - 1) && h < 0.45) {
+          const px = d > 0.5 ? Math.round(x * (d + 1) / d) : x, pz = d > 0.5 ? Math.round(z * (d + 1) / d) : z;
+          vs.set(cx + px, y >= H - 1 ? y + 1 : y, cz + pz, mixHex(0xe6d6a6, 0xc4cf8a, hash3(x, y, z)));
+        }
+      }
+    }
+  }
+  return vs;
+}
+// Toadstool leather coral: a mushroom cap with fuzzy polyps
+function bToadstool() {
+  const vs = new VSet();
+  for (let y = -4; y < 13; y++) stamp(vs, 0, y, 0, 5 + Math.max(0, 2 - y) * 0.5, () => jit(0xe9dfbd, 0.04));
+  const Rr = 22;
+  for (let x = -Rr; x <= Rr; x++) for (let z = -Rr; z <= Rr; z++) {
+    const r = Math.hypot(x, z); if (r > Rr) continue;
+    const ang = Math.atan2(z, x);
+    const wave = r > 14 ? Math.round(Math.sin(ang * 5) * 2.2 * (r - 14) / 8) : 0;
+    const y = 13 + Math.round((1 - (r / Rr) ** 2) * 3) + wave;
+    vs.set(x, y, z, jit(0xd9c28a, 0.04)); vs.set(x, y - 1, z, jit(0xe6d8b0, 0.04));
+    const h = hash3(x, 3, z);
+    if (r < Rr - 1 && h < 0.55) { vs.set(x, y + 1, z, 0xf0e6c4); if (h < 0.28) vs.set(x, y + 2, z, 0xd5e8a2); }
+  }
+  return vs;
+}
+// Euphyllia-type: tentacles on a skeleton; tip 'hammer' (T-shaped) or 'torch' (round)
+function bEuphyllia(tip) {
+  const vs = new VSet(), heads = 4;
+  for (let h = 0; h < heads; h++) {
+    const cx = h === 0 ? 0 : RI(-6, 6), cz = h === 0 ? 0 : RI(-6, 6);
+    for (let y = -4; y < 5; y++) for (let x = -4; x <= 4; x++) for (let z = -4; z <= 4; z++) {
+      const d = Math.hypot(x, z); if (d > 4 || (d < 3 && y > 2)) continue;
+      vs.set(cx + x, y, cz + z, jit(0xc9b48a, 0.05));
+    }
+    for (let x = -6; x <= 6; x++) for (let z = -6; z <= 6; z++) {
+      const d = Math.hypot(x, z); if (d > 6 || ((x + z) & 1) || hash3(cx + x, 31, cz + z) > 0.75) continue;
+      const H = tip === 'hammer' ? RI(10, 16) : RI(14, 22);
+      const sx = d > 0.5 ? x / d : 0, sz = d > 0.5 ? z / d : 0;
+      let tx = x, tz = z;
+      for (let y = 3; y < 3 + H; y++) {
+        const k = (y - 3) / H;
+        tx = x + Math.round(sx * k * k * 7); tz = z + Math.round(sz * k * k * 7);
+        vs.set(cx + tx, y, cz + tz, tip === 'hammer' ? jit(mixHex(0x2a7f50, 0x4fb071, k), 0.05) : jit(mixHex(0x6a5f34, 0x9a8a50, k), 0.05));
+      }
+      const ty = 3 + H;
+      if (tip === 'hammer') {
+        const ax = hash3(x, 5, z) < 0.5;
+        for (let s = -2; s <= 2; s++) vs.set(cx + tx + (ax ? s : 0), ty, cz + tz + (ax ? 0 : s), Math.abs(s) === 2 ? 0xf4ffd0 : 0xc8ff6a);
+      } else {
+        for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) for (let c = 0; c < 2; c++) vs.set(cx + tx + a, ty + b, cz + tz + c, b ? 0xfff6a0 : 0xffe14a);
+      }
+    }
+  }
+  return vs;
+}
+// Bubble coral: clustered water-filled vesicles
+function bBubble() {
+  const vs = new VSet();
+  for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) for (let y = -3; y <= 5; y++) {
+    if ((x * x + z * z) / 81 + (y / 5.5) ** 2 > 1) continue;
+    vs.set(x, y, z, jit(0x6e5f45, 0.05));
+  }
+  for (let k = 0; k < 34; k++) {
+    const a = R(0, Math.PI * 2), rr = Math.sqrt(rand()) * 8.5, cy = 2 + Math.sqrt(Math.max(0, 1 - (rr / 9) ** 2)) * 5;
+    const r = R(2.4, 3.6), cx = Math.cos(a) * rr, cz = Math.sin(a) * rr;
+    stamp(vs, cx, cy, cz, r, (x, y) => mixHex(0xcfc6aa, 0xfffaf0, (y - cy) / (2 * r) + 0.5));
+  }
+  return vs;
+}
+// Grooved brain coral: meandering ridges, groove along each ridge top
+function bBrain() {
+  const vs = new VSet(), Rr = 19, Hh = 13;
+  for (let x = -Rr; x <= Rr; x++) for (let z = -Rr; z <= Rr; z++) for (let y = -3; y <= Hh; y++) {
+    const e = (x * x + z * z) / (Rr * Rr) + (Math.max(0, y) / Hh) ** 2;
+    if (e > 1) continue;
+    const v = Math.sin(noise3(x * 0.07 + 3, y * 0.07, z * 0.07) * 30);
+    if (e > 0.86) {
+      if (v < -0.2) continue;
+      vs.set(x, y, z, v > 0.72 ? 0x94702f : jit(0xdab45a, 0.04));
+    } else vs.set(x, y, z, jit(0x5f8f3a, 0.05));
+  }
+  return vs;
+}
+// Open brain: fleshy two-lobed polyp on soft sand
+function bOpenBrain() {
+  const vs = new VSet();
+  const A = [-4, 0, 7.5], B = [5, 1, 6.5];
+  for (let x = -13; x <= 13; x++) for (let z = -9; z <= 9; z++) {
+    const fa = Math.hypot(x - A[0], z - A[1]) / A[2], fb = Math.hypot(x - B[0], z - B[1]) / B[2];
+    const f = Math.min(fa, fb); if (f > 1) continue;
+    const C = fa < fb ? A : B, ang = Math.atan2(z - C[1], x - C[0]);
+    const h = Math.round(4 * (1 - f * f)) + 1;
+    let top = 0xc02a3a;
+    if (Math.sin(ang * 18) > 0.55) top = 0xe8707e;
+    if (f > 0.88) top = 0xf3a6ae;
+    if (f < 0.45) top = 0x45c06a;
+    if (f < 0.6 && Math.abs(z - 0.1 * x) < 1) top = 0x24703a;
+    for (let y = -2; y <= h; y++) vs.set(x, y, z, y === h ? jit(top, 0.03) : jit(0x9a2030, 0.05));
+  }
+  return vs;
+}
+// Mushroom (Fungia) coral: free-living oval disc with radial septa
+function bFungia() {
+  const vs = new VSet(), rx = 10, rz = 7;
+  for (let x = -rx; x <= rx; x++) for (let z = -rz; z <= rz; z++) {
+    const f = Math.hypot(x / rx, z / rz); if (f > 1) continue;
+    const ang = Math.atan2(z / rz, x / rx), sep = Math.sin(ang * 36) > 0.2 && f > 0.15;
+    const top = Math.round(3 * (1 - f * f)) + (sep ? 1 : 0);
+    for (let y = -1; y <= top; y++) {
+      let c = y === top ? (sep ? 0xf3e4f8 : 0xb47ad0) : 0x9a6ab8;
+      if (y === top && Math.abs(z) < 1 && Math.abs(x) < 4) c = 0x5a2a6a;
+      vs.set(x, y, z, jit(c, 0.03));
+    }
+  }
+  return vs;
+}
+// Duncan coral: tubes, each topped by a green disc ringed with short tentacles
+function bDuncan() {
+  const vs = new VSet();
+  for (let k = 0; k < 7; k++) {
+    let x = R(-3, 3), y = -3, z = R(-3, 3);
+    const d = new V3(R(-0.5, 0.5), 1, R(-0.5, 0.5)).normalize(), L = R(6, 15);
+    for (let i = 0; i < L / 0.6; i++) { x += d.x * 0.6; y += d.y * 0.6; z += d.z * 0.6; stamp(vs, x, y, z, 1.6, () => jit(0x8a6a4a, 0.05)); }
+    const cx = Math.round(x), cy = Math.round(y) + 1, cz = Math.round(z);
+    for (let a = -4; a <= 4; a++) for (let b = -4; b <= 4; b++) {
+      const r = Math.hypot(a, b); if (r > 4) continue;
+      vs.set(cx + a, cy, cz + b, r < 1 ? 0x2f6a3a : jit(0x5cc46a, 0.05));
+      if (r > 3 && hash3(cx + a, cy, cz + b) < 0.7) vs.set(cx + a, cy + 1, cz + b, 0xa8f0b0);
+    }
+  }
+  return vs;
+}
+// Green star polyps: purple mat with bright green polyps
+const bGSP = (ctx) => matLayer(ctx, 18, 0x6a2f86, (vs, x, h, z) => {
+  if ((x & 1) || (z & 1)) return;
+  const H = 2 + Math.floor(hash3(x, 2, z) * 3);
+  for (let y = 1; y < H; y++) vs.set(x, h + y, z, 0x5fd86a);
+  vs.set(x, h + H, z, 0xe6ffcf);
+});
+// Zoanthids: colonial polyps with distinct oral-disc colours
+const bZoa = (pal) => (ctx) => matLayer(ctx, 12, 0x5a4a3a, (vs, x, h, z) => {
+  if (((x % 3) + 3) % 3 || ((z % 3) + 3) % 3) return;
+  const H = 1 + Math.floor(hash3(x, 4, z) * 2);
+  for (let y = 1; y <= H; y++) vs.set(x, h + y, z, pal.skirt);
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) vs.set(x + a, h + H + 1, z + b, a === 0 && b === 0 ? pal.mouth : pal.disc);
+});
+// Maxima clam: fluted shell, patterned blue mantle
+function bClam() {
+  const vs = new VSet(), rx = 11, rz = 6.5;
+  for (let x = -rx; x <= rx; x++) for (let z = -rz; z <= rz; z++) {
+    const f = (x / rx) ** 2 + (z / rz) ** 2; if (f > 1) continue;
+    const depth = Math.round(5 * Math.sqrt(1 - f));
+    for (let y = -depth - 1; y <= 0; y++) vs.set(x, y, z, jit(shade(0xd8d2c4, Math.sin(x * 1.1) > 0 ? 1 : 0.86), 0.03));
+    if (f > 0.8) { if (Math.sin(x * 1.2) > 0) vs.set(x, 1, z, 0xf2eee6); continue; }
+    let c = 0x2f62d0;
+    if (noise3(x * 0.4, 0, z * 0.4) > 0.6) c = 0x7fe6ff;
+    if (Math.sin(x * 0.9 + z * 1.7) > 0.85) c = 0x1a2f80;
+    if (f > 0.6 && hash3(x, 1, z) < 0.3) c = 0xd9b44a;
+    const sd = Math.hypot(x + 6, z);
+    if (sd < 1.6) c = sd < 0.8 ? 0x10204a : 0x9fe0ff;
+    vs.set(x, 1, z, c);
+  }
+  return vs;
+}
+// Bubble-tip anemone: tentacles that swell into bulbs at the tips
+function bAnemone() {
+  const vs = new VSet();
+  for (let y = -4; y < 6; y++) stamp(vs, 0, y, 0, 7, () => jit(mixHex(0x9a4c33, 0xb8694a, (y + 4) / 10), 0.05));
+  for (let x = -11; x <= 11; x++) for (let z = -11; z <= 11; z++) {
+    const d2 = x * x + z * z; if (d2 > 121) continue;
+    vs.set(x, 6, z, d2 < 3 ? 0x5a2a28 : jit(0x9a5446, 0.05));
+    if (d2 < 3 || (x + z) % 2 !== 0) continue;
+    const h = 5 + Math.floor(hash3(x, 11, z) * 7) - (d2 > 80 ? 3 : 0);
+    for (let y = 7; y < 7 + h; y++) vs.set(x, y, z, jit(mixHex(0xb48a55, 0xe1c48f, (y - 7) / h), 0.05));
+    vs.set(x, 7 + h, z, 0xe0457a); vs.set(x + 1, 7 + h, z, 0xe0457a);
+    vs.set(x, 8 + h, z, 0xff5f95); vs.set(x, 9 + h, z, 0xffc0d8);
+  }
+  return vs;
+}
+// Feather duster worm: papery tube and a banded crown of radioles
+const bDuster = (band) => () => {
+  const vs = new VSet(), H = RI(18, 28);
+  for (let y = -3; y < H; y++) for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (Math.abs(a) + Math.abs(b) < 2) vs.set(a, y, b, jit(0xb59a74, 0.05));
+  for (let k = 0; k < 22; k++) {
+    const ang = k * Math.PI * 2 / 22;
+    for (let r = 1; r <= 10; r += 0.5) {
+      const x = Math.round(Math.cos(ang) * r), z = Math.round(Math.sin(ang) * r), y = H + Math.round(r * 0.9);
+      vs.set(x, y, z, Math.floor(r / 2) % 2 ? band : 0xf2e8e0);
+      if (r > 3 && hash3(x, y, z) < 0.5) vs.set(x, y + 1, z, 0xf8f0ea);
+    }
+  }
+  return vs;
+};
+// Common sea fan: flat lattice across the current
+const bFan = (rx, ry) => () => {
+  const vs = new VSet();
+  for (let y = -3; y < 6; y++) for (let a = 0; a < 2; a++) vs.set(a, y, 0, 0x5a2490);
+  const inFan = (x, y) => { const e = (x / rx) ** 2 + ((y - 6) / ry) ** 2; return e <= 1 && y - 6 >= Math.abs(x) * 0.25 ? e : -1; };
+  for (let k = -5; k <= 5; k++) {
+    const a = k * 0.27;
+    for (let r = 0; r < Math.max(rx, ry) * 1.2; r += 0.5) {
+      const x = Math.round(Math.sin(a) * r), y = 6 + Math.round(Math.cos(a) * r);
+      const e = inFan(x, y); if (e < 0) break;
+      vs.set(x, y, 0, jit(mixHex(0x5f2aa5, 0xc68cf5, e), 0.04)); vs.set(x + 1, y, 0, jit(mixHex(0x5f2aa5, 0xc68cf5, e), 0.04));
+    }
+  }
+  for (let x = -rx; x <= rx; x++) for (let y = 6; y <= ry + 6; y++) {
+    const e = inFan(x, y); if (e < 0) continue;
+    if (((x + y) % 3 === 0) || ((x - y + 600) % 3 === 0) || e > 0.9) vs.set(x, y, 0, jit(mixHex(0x7e34c8, 0xe7b4ff, e), 0.05));
+  }
+  return vs;
+};
+// Yellow tube sponge
+function bTubeSponge() {
+  const vs = new VSet();
+  for (let k = 0; k < 4; k++) {
+    const cx = k === 0 ? 0 : RI(-9, 9), cz = k === 0 ? 0 : RI(-6, 6), r = R(4, 6.5), H = RI(18, 40);
+    for (let y = -3; y < H; y++) for (let x = -8; x <= 8; x++) for (let z = -8; z <= 8; z++) {
+      const d = Math.hypot(x, z);
+      if (d > r + (y < 3 ? 1 : 0) || d < r - 1.6) continue;
+      let c = y >= H - 1 ? 0xffe27a : 0xf2c430;
+      if (hash3(cx + x, y, cz + z) < 0.15) c = 0xc89a20;
+      vs.set(cx + x, y, cz + z, jit(c, 0.04));
+    }
+  }
+  return vs;
+}
+
+// rocks and their residents
+placeCoral('elkhorn', -11.8, -4.2, bElkhorn, MAT.stony);
+placeCoral('birdsnest', -8.2, -5.9, bBirdsnest, MAT.stony);
+placeCoral('toadstool', -15.6, -4.8, bToadstool, MAT.soft);
+placeCoral('torch', -10, -0.4, () => bEuphyllia('torch'), MAT.tentacle, { solid: false });
+placeCoral('zoa', -14.2, -1.3, bZoa({ skirt: 0x3a7a3a, disc: 0xff8a1a, mouth: 0x9aff3a }), MAT.zoa);
+placeCoral('gsp', -6.2, -3.9, bGSP, MAT.polyp, { solid: false });
+placeCoral('table', 12, -6, bTable, MAT.stony);
+placeCoral('staghorn', 13.8, -2.2, bStaghorn, MAT.stony);
+placeCoral('hammer', 8.3, -3.2, () => bEuphyllia('hammer'), MAT.tentacle, { solid: false });
+placeCoral('montiCap', 7, -6.4, bMontiCap, MAT.stony);
+placeCoral('zoa', 10.4, -1.4, bZoa({ skirt: 0x6a3a9a, disc: 0x9a4ff0, mouth: 0xffe14d }), MAT.zoa, { label: false });
+placeCoral('zoa', 0.6, -5, bZoa({ skirt: 0x2f8a5a, disc: 0x3cf07a, mouth: 0xff3a5a }), MAT.zoa, { label: false });
+placeCoral('seaFan', -1, -8.8, bFan(40, 58), MAT.fan, { rotY: 0.15, solid: false });
+placeCoral('seaFan', 15, -7.6, bFan(30, 44), MAT.fan, { rotY: -0.35, solid: false, label: false });
+placeCoral('sponge', 5.5, -8.2, bTubeSponge, MAT.sponge);
+// sand residents
+placeCoral('pillar', 16.8, -0.4, bPillar, MAT.stony);
+placeCoral('bubble', 3.6, -3.8, bBubble, MAT.stony);
+placeCoral('brain', -13.5, 2.6, bBrain, MAT.stony);
+placeCoral('openBrain', -0.8, 5.3, bOpenBrain, MAT.stony, { sink: 0.15 });
+placeCoral('fungia', 9.6, 4.6, bFungia, MAT.stony, { sink: 0.12 });
+placeCoral('duncan', 17, 2.5, bDuncan, MAT.polyp);
+placeCoral('clam', 12, 1.4, bClam, MAT.clam, { sink: 0.3 });
+placeCoral('duster', -2.4, 1.2, bDuster(0x7a1f3d), MAT.duster, { solid: false });
+placeCoral('duster', 17.4, -4.6, bDuster(0xd2632a), MAT.duster, { solid: false, label: false });
+placeCoral('duster', -18, 2.5, bDuster(0x3a4fd0), MAT.duster, { solid: false, label: false });
+const anem = placeCoral('anemone', -4.5, 2.5, bAnemone, MAT.anemone, { solid: false });
+const ANEM = new V3(anem.pos.x, anem.pos.y - 0.4, anem.pos.z);
+
+// macroalgae (scenery scale)
+const kelpMat = reefMat({ sway: 1.0, glow: 0.12, caustic: 0.4 });
+function kelp(wx, wz, blades, hMin, hMax, label) {
+  const vs = new VSet();
+  let top = 0;
   for (let b = 0; b < blades; b++) {
     const bx = RI(-5, 5), bz = RI(-5, 5), H = Math.round(R(hMin, hMax) / G), ph = R(0, 6);
+    top = Math.max(top, H);
     const c0 = [0x2f8f45, 0x3c9e3a, 0x2c8a5c, 0x4fa83a][RI(0, 3)];
     for (let y = 0; y < H; y++) {
       const x = bx + Math.round(Math.sin(y * 0.12 + ph) * 1.6);
@@ -676,81 +1007,18 @@ function kelp(wx, wz, blades, hMin, hMax) {
       }
     }
   }
-  placeLocal(vs, kelpMat, wx, wz);
+  const ix = gr(wx), iz = gr(wz), ty = topAt(ix, iz);
+  const m = new THREE.Mesh(buildGeo(vs), kelpMat);
+  m.scale.setScalar(G);
+  m.position.set(ix * G, (ty + 1) * G, iz * G);
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m);
+  const obj = { info: INFO.caulerpa, pos: new V3(m.position.x, m.position.y + top * G * 0.6, m.position.z), mesh: m };
+  m.userData.pick = obj; pickables.push(m);
+  if (label) LABELS.push(obj);
 }
-function seaFan(wx, wz, wrx, wry, rotY) {
-  const vs = new VSet(), rx = Math.round(wrx / G), ry = Math.round(wry / G);
-  for (let y = 0; y < 4; y++) { vs.set(0, y, 0, 0x6d2fa8); vs.set(1, y, 0, 0x6d2fa8); }
-  const inFan = (x, y) => { const e = (x / rx) ** 2 + ((y - 4) / ry) ** 2; return e <= 1 && y - 4 >= Math.abs(x) * 0.25 ? e : -1; };
-  for (let k = -4; k <= 4; k++) {
-    const a = k * 0.33;
-    for (let r = 0; r < Math.max(rx, ry) * 1.2; r += 0.5) {
-      const x = Math.round(Math.sin(a) * r), y = 4 + Math.round(Math.cos(a) * r);
-      const e = inFan(x, y); if (e < 0) break;
-      vs.set(x, y, 0, jit(mixHex(0x6a2bb5, 0xd59bff, e), 0.04));
-    }
-  }
-  for (let x = -rx; x <= rx; x++) for (let y = 4; y <= ry + 4; y++) {
-    const e = inFan(x, y); if (e < 0) continue;
-    if (((x + y) % 4 === 0) || ((x - y + 400) % 4 === 0) || e > 0.86) vs.set(x, y, 0, jit(mixHex(0x7e34c8, 0xe7b4ff, e), 0.05));
-  }
-  placeLocal(vs, fanMat, wx, wz, rotY);
-}
-function anemone(wx, wz) {
-  const vs = new VSet();
-  for (let x = -5; x <= 5; x++) for (let z = -5; z <= 5; z++) {
-    if (x * x + z * z > 22) continue;
-    for (let y = 0; y < 4; y++) vs.set(x, y, z, jit(mixHex(0x9a4c33, 0xb8694a, y / 4), 0.05));
-  }
-  for (let x = -10; x <= 10; x++) for (let z = -10; z <= 10; z++) {
-    const d2 = x * x + z * z;
-    if (d2 > 90) continue;
-    vs.set(x, 4, z, d2 < 3 ? 0x5a2a28 : jit(0x9a5446, 0.05));
-    if (d2 < 3 || (x + z) % 2 !== 0) continue;
-    const h = 3 + Math.floor(hash3(x, 11, z) * 5) - (d2 > 60 ? 2 : 0);
-    for (let y = 5; y < 5 + h; y++) vs.set(x, y, z, jit(mixHex(0xb48a55, 0xe1c48f, (y - 5) / h), 0.05));
-    vs.set(x, 5 + h, z, jit(0xe0457a, 0.04));
-    vs.set(x, 6 + h, z, jit(0xff5f95, 0.04));
-    vs.set(x, 7 + h, z, 0xffb3cf);
-  }
-  return placeLocal(vs, anemMat, wx, wz);
-}
-function torchCoral(wx, wz) {
-  const vs = new VSet();
-  for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) {
-    if (x * x + z * z > 10) continue;
-    for (let y = 0; y < 3; y++) vs.set(x, y, z, jit(0xb9a27a, 0.05));
-  }
-  for (let x = -6; x <= 6; x++) for (let z = -6; z <= 6; z++) {
-    const d2 = x * x + z * z;
-    if (d2 > 36 || hash3(x, 21, z) > 0.62) continue;
-    const H = 6 + Math.floor(hash3(x, 22, z) * 8) - (d2 > 20 ? 2 : 0);
-    for (let y = 3; y < 3 + H; y++) {
-      const top = y >= 1 + H;
-      vs.set(x, y, z, top ? jit(0xd7ff6a, 0.05) : jit(mixHex(0x5f7d3a, 0x8fb04f, (y - 3) / H), 0.05));
-    }
-  }
-  placeLocal(vs, torchMat, wx, wz);
-}
-function featherDuster(wx, wz, band) {
-  const vs = new VSet(), H = RI(12, 18);
-  for (let y = 0; y < H; y++) vs.set(0, y, 0, jit(0xb59a74, 0.05));
-  for (let k = 0; k < 16; k++) {
-    const a = k * Math.PI * 2 / 16;
-    for (let r = 1; r <= 6; r += 0.5) {
-      const x = Math.round(Math.cos(a) * r), z = Math.round(Math.sin(a) * r), y = H + Math.round(r * 0.8);
-      vs.set(x, y, z, Math.floor(r) % 2 ? band : 0xf2e8e0);
-    }
-  }
-  placeLocal(vs, dusterMat, wx, wz);
-}
-kelp(-17.5, -8, 6, 6, 10); kelp(-15.5, -8.5, 4, 4, 7.5); kelp(17.5, -8, 6, 6, 9.5); kelp(4.5, -8.5, 4, 3.5, 6.5);
-kelp(-16.5, 6, 5, 1.2, 2.5); kelp(-13, 7, 4, 1, 2); kelp(15, 5.5, 5, 1.2, 2.8); kelp(1.5, 7.6, 3, 0.8, 1.5);
-seaFan(-1, -8.5, 4.5, 7, 0.15); seaFan(15, -7.5, 3.5, 5.5, -0.35);
-torchCoral(8.4, -2.4);
-featherDuster(-2.4, 1.2, 0x7a1f3d); featherDuster(17.2, -4.6, 0xd2632a); featherDuster(-18, 2.5, 0x3a4fd0);
-const anemMesh = anemone(-4.5, 2.5);
-const ANEM = new V3(anemMesh.position.x, anemMesh.position.y + 3, anemMesh.position.z);
+kelp(-17.5, -8, 6, 6, 10, true); kelp(-15.5, -8.5, 4, 4, 7.5); kelp(17.5, -8, 6, 6, 9.5); kelp(2.8, -8.9, 4, 3.5, 6.5);
+kelp(-16.5, 6, 5, 1.2, 2.5); kelp(15, 5.5, 5, 1.2, 2.8);
 
 // ---------- tank shell, stand, back wall, water ----------
 const TOP = 22.2, WATER = 20.5;
@@ -816,16 +1084,6 @@ const snow = new THREE.Points(snowGeo, new THREE.PointsMaterial({ color: 0xe6fbf
 scene.add(snow);
 
 // ---------- fish ----------
-const INFO = {
-  clown: { name: 'Ocellaris clownfish', sci: 'Amphiprion ocellaris', swatch: '#ff7a1a', fact: 'Lives among the tentacles of a host anemone. A mucus coat keeps the anemone from stinging it.' },
-  blueTang: { name: 'Blue tang', sci: 'Paracanthurus hepatus', swatch: '#2a5cf0', fact: 'Has a sharp, scalpel-like spine at the base of its tail that it raises when threatened.' },
-  yellowTang: { name: 'Yellow tang', sci: 'Zebrasoma flavescens', swatch: '#ffd400', fact: 'Grazes on algae for most of the day. The white spine near its tail marks it as a surgeonfish.' },
-  gramma: { name: 'Royal gramma', sci: 'Gramma loreto', swatch: '#c33ad8', fact: 'Often swims upside down under rock ledges, keeping its belly toward the nearest surface.' },
-  chromis: { name: 'Green chromis', sci: 'Chromis viridis', swatch: '#8ff0d0', fact: 'Lives in schools above branching coral and dives between the branches when threatened.' },
-  goby: { name: 'Yellow watchman goby', sci: 'Cryptocentrus cinctus', swatch: '#ffcf1a', fact: 'Shares a sand burrow with a pistol shrimp. The goby keeps watch at the entrance, and when it flicks its tail or darts inside, the shrimp retreats too.' },
-  shrimp: { name: 'Tiger pistol shrimp', sci: 'Alpheus bellulus', swatch: '#b8642e', fact: 'Digs and maintains the burrow it shares with the goby, and keeps an antenna on the fish while it works. Its large claw snaps shut fast enough to form a bubble that collapses with a loud crack.' },
-  crab: { name: 'Scarlet reef hermit crab', sci: 'Paguristes cadenati', swatch: '#d8321e', fact: 'Moves into a larger empty shell as it grows. It picks algae and leftover food off the sand.' },
-};
 function clownBand(t, u) {
   const bands = [[0.73, 0.04], [0.47 + 0.05 * (1 - u * u), 0.045], [0.13, 0.025]];
   for (const [c, w] of bands) { const d = Math.abs(t - c); if (d < w) return 1; if (d < w + 0.05) return 2; }
@@ -945,7 +1203,7 @@ function fishGeos(sp) {
   return sp.geo;
 }
 const fishMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.05 });
-const fishes = [], pickables = [];
+const fishes = [];
 const school = { target: new V3(0, 13, 0), c: new V3(), v: new V3(), members: [] };
 const ROCK_ANCHORS = [new V3(-12, 6, -4), new V3(10, 6.5, -4), new V3(-3.5, 7.5, -4.5)];
 const BX = W / 2 - 1.2, BZ = D / 2 - 1.2, BTOP = 19.6;
@@ -1121,7 +1379,7 @@ marker.visible = false; scene.add(marker);
 let selected = null;
 
 // ---------- camera control ----------
-const cam = { theta: 0, phi: 0.15, zoom: 1, target: new V3(0, 9.5, 0), drift: !matchMedia('(prefers-reduced-motion: reduce)').matches, lastUser: -1e9 };
+const cam = { theta: 0, phi: 0.17, zoom: 0.78, target: new V3(0, 7.5, 0), drift: !matchMedia('(prefers-reduced-motion: reduce)').matches, lastUser: -1e9 };
 let fitR = 46;
 function resize() {
   const w = host.clientWidth, h = host.clientHeight;
@@ -1215,6 +1473,24 @@ $('b-add').addEventListener('click', () => {
   const type = ['blueTang', 'yellowTang', 'gramma', 'chromis', 'chromis'][RI(0, 4)];
   select(addFish(type, new V3(R(-12, 12), WATER - 1.5, R(-4, 4))));
 });
+const labelLayer = $('labels');
+labelLayer.hidden = true;
+for (const o of LABELS) { o.tag = document.createElement('span'); o.tag.className = 'tag'; o.tag.textContent = o.info.name; labelLayer.appendChild(o.tag); }
+$('b-labels').addEventListener('click', (e) => {
+  labelLayer.hidden = !labelLayer.hidden;
+  e.currentTarget.setAttribute('aria-pressed', String(!labelLayer.hidden));
+});
+const projV = new V3();
+function updateLabels() {
+  if (labelLayer.hidden) return;
+  const w = host.clientWidth, h = host.clientHeight;
+  for (const o of LABELS) {
+    projV.copy(o.pos).project(camera);
+    if (projV.z > 1 || Math.abs(projV.x) > 1.1 || Math.abs(projV.y) > 1.1) { o.tag.hidden = true; continue; }
+    o.tag.hidden = false;
+    o.tag.style.transform = `translate(${((projV.x + 1) / 2 * w).toFixed(1)}px, ${((1 - projV.y) / 2 * h).toFixed(1)}px) translate(-50%, -130%)`;
+  }
+}
 const driftBtn = $('b-drift');
 driftBtn.setAttribute('aria-pressed', String(cam.drift));
 driftBtn.addEventListener('click', () => { cam.drift = !cam.drift; driftBtn.setAttribute('aria-pressed', String(cam.drift)); });
@@ -1509,6 +1785,7 @@ function frame(now) {
   }
 
   renderer.render(scene, camera);
+  updateLabels();
   requestAnimationFrame(frame);
 }
 document.getElementById('loading').hidden = true;

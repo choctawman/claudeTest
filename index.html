@@ -256,7 +256,7 @@ const AOK = [0.5, 0.68, 0.85, 1.0];
 const LIN8 = new Float32Array(256).map((_, i) => { const c = i / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
 function buildGeo(vs, solid) {
   solid = solid || ((x, y, z) => vs.has(x, y, z));
-  const P = [], N = [], C = [], I = [];
+  const P = [], N = [], C = [], A = [], I = [];
   const q = [0, 0, 0], ao = [0, 0, 0, 0];
   for (const [x, y, z, hex] of vs.m.values()) {
     const r = LIN8[(hex >> 16) & 255], g = LIN8[(hex >> 8) & 255], b = LIN8[hex & 255];
@@ -279,7 +279,7 @@ function buildGeo(vs, solid) {
         const k = Math.pow(AOK[lvl] * f.s, 1.8);
         P.push(x + c[0] - 0.5, y + c[1] - 0.5, z + c[2] - 0.5);
         N.push(f.d[0], f.d[1], f.d[2]);
-        C.push(r * k, g * k, b * k);
+        C.push(r, g, b); A.push(k);
       }
       if (ao[0] + ao[3] > ao[1] + ao[2]) I.push(n, n + 1, n + 3, n, n + 3, n + 2);
       else I.push(n, n + 1, n + 2, n + 2, n + 1, n + 3);
@@ -289,6 +289,7 @@ function buildGeo(vs, solid) {
   geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  geo.setAttribute('ao', new THREE.Float32BufferAttribute(A, 1));
   geo.setIndex(I);
   geo.computeBoundingSphere();
   return geo;
@@ -338,7 +339,7 @@ sun.shadow.normalBias = 0.02;
 scene.add(sun, sun.target);
 
 // shared shader uniforms
-const U = { uTime: { value: 0 }, uNight: { value: 0 }, uWater: { value: 20.5 }, uSunDir: { value: sun.position.clone().normalize() } };
+const U = { uStyle: { value: 0 }, uTime: { value: 0 }, uNight: { value: 0 }, uWater: { value: 20.5 }, uSunDir: { value: sun.position.clone().normalize() } };
 const G = 0.25; // world size of one scenery voxel
 const CAUSTIC_GLSL = `
 float causticF(vec2 uv, float time) {
@@ -355,7 +356,7 @@ float causticF(vec2 uv, float time) {
 // Sunlight through the rippling surface: the directional light is modulated by a caustic pattern
 // traced up to the surface along the light direction, with a slight colour split, so it stays in shadow.
 const CAUSTIC_LIGHT_GLSL = `
-uniform float uTime; uniform float uNight; uniform float uWater; uniform vec3 uSunDir; uniform float uCaus;
+uniform float uTime; uniform float uNight; uniform float uWater; uniform vec3 uSunDir; uniform float uCaus; uniform float uStyle;
 varying vec3 vWPos;
 ${CAUSTIC_GLSL}
 vec3 causticLight() {
@@ -364,21 +365,82 @@ vec3 causticLight() {
   float t = uTime * 0.45, off = 0.0035 + k * 0.00022;
   vec3 c = vec3(causticF(sp + vec2(off, 0.0), t), causticF(sp, t), causticF(sp - vec2(off, 0.0), t));
   c = mix(c, vec3((c.r + c.g + c.b) / 3.0), clamp(k / 40.0, 0.0, 0.6));
+  float cm = (c.r + c.g + c.b) / 3.0;
+  if ((uStyle > 0.5 && uStyle < 1.5) || (uStyle > 2.5 && uStyle < 3.5)) c = vec3(smoothstep(0.26, 0.32, cm)) * 0.32; // solid toon/pixel caustic shapes
+  else if (uStyle > 1.5 && uStyle < 2.5) c = vec3(cm) * 0.6;                                                      // soft wash
+  else if (uStyle > 3.5) c = vec3(0.23);                                                                           // ink: none
   return mix(vec3(1.0), vec3(0.3) + c * 3.0, uCaus * (1.0 - 0.8 * uNight));
+}`;
+// Per-style surface treatment. vLocal is the position in voxel units, so every voxel face gets its own texture.
+const STYLE_GLSL = `
+varying vec3 vLocal; varying vec3 vObjN; varying float vAo;
+float styleLight(float nl) {
+  if (uStyle > 0.5 && uStyle < 1.5) return (nl < 0.08 ? 0.0 : (nl < 0.45 ? 0.55 : 1.0)) / max(nl, 0.05);  // cel: two hard bands
+  if (uStyle > 1.5 && uStyle < 2.5) return (0.55 * nl + 0.35) / max(nl, 0.05);                            // watercolor: soft wrap
+  if (uStyle > 2.5 && uStyle < 3.5) return (nl < 0.1 ? 0.0 : (nl < 0.5 ? 0.6 : 1.0)) / max(nl, 0.05);    // pixel: stepped
+  return 1.0;
+}
+float styleAO(float a) {
+  if (uStyle > 0.5 && uStyle < 1.5) return mix(0.72, 1.0, step(0.78, a));
+  if (uStyle > 1.5 && uStyle < 2.5) return mix(1.0, a, 0.5);
+  if (uStyle > 2.5 && uStyle < 3.5) return floor(a * 4.0 + 0.5) / 4.0;
+  if (uStyle > 3.5) return 1.0;
+  return a;
+}`;
+const STYLE_SURFACE_GLSL = `
+{
+  vec3 sn = normalize(vObjN);
+  vec2 fuv = abs(sn.x) > 0.5 ? vLocal.zy : (abs(sn.y) > 0.5 ? vLocal.xz : vLocal.xy);
+  vec2 ff = fract(fuv + 0.5);
+  vec3 vid = floor(vLocal + 0.5 - sn * 0.25);
+  float vh = fract(sin(dot(vid, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+  float bd = max(abs(ff.x - 0.5), abs(ff.y - 0.5)) * 2.0;
+  if (uStyle > 0.5 && uStyle < 1.5) {
+    float rim = pow(1.0 - abs(dot(normalize(normal), normalize(vViewPosition))), 3.0);
+    gl_FragColor.rgb += diffuseColor.rgb * step(0.35, rim) * 0.22;
+  } else if (uStyle > 1.5 && uStyle < 2.5) {
+    vec3 c = gl_FragColor.rgb;
+    float lum = dot(c, vec3(0.3, 0.59, 0.11));
+    float gran = fract(sin(dot(floor(ff * 9.0) + vid.xz * 3.1 + vid.y, vec2(12.9898, 78.233))) * 43758.5453);
+    float pool = smoothstep(0.7, 1.0, bd);
+    c = mix(c, vec3(lum), 0.15) * (0.9 + 0.2 * vh);
+    c *= 1.0 - pool * 0.38;
+    c *= 0.9 + 0.14 * gran;
+    c = mix(c, c * 1.25 + 0.02, 0.35 * (1.0 - smoothstep(0.0, 0.6, bd)));
+    gl_FragColor.rgb = c;
+  } else if (uStyle > 2.5 && uStyle < 3.5) {
+    vec2 tx = floor(ff * 6.0);
+    float th = fract(sin(dot(tx + vid.xy * 7.0 + vid.z * 13.0, vec2(12.9898, 78.233))) * 43758.5453);
+    float bevel = (tx.x < 0.5 || tx.y > 4.5) ? 1.2 : ((tx.x > 4.5 || tx.y < 0.5) ? 0.75 : 1.0);
+    gl_FragColor.rgb *= bevel * (0.88 + 0.24 * th);
+  } else if (uStyle > 3.5) {
+    float lum = clamp(pow(dot(gl_FragColor.rgb, vec3(0.3, 0.59, 0.11)), 0.6) * 1.5, 0.0, 1.0);
+    float h1 = abs(fract((ff.x + ff.y) * 3.0) - 0.5) * 2.0, h2 = abs(fract((ff.x - ff.y) * 3.0) - 0.5) * 2.0;
+    float k = (1.0 - smoothstep(0.6, 0.85, h1)) * (1.0 - smoothstep(0.42, 0.58, lum)) * 0.75;
+    k = max(k, (1.0 - smoothstep(0.6, 0.85, h2)) * (1.0 - smoothstep(0.18, 0.32, lum)));
+    k = max(k, smoothstep(0.84, 0.94, bd) * 0.5);
+    k = max(k, (1.0 - smoothstep(0.55, 0.8, vAo)) * 0.6);
+    vec3 paper = vec3(0.86, 0.8, 0.68);
+    vec3 wash = mix(paper, paper * (vColor.rgb * 1.8 + 0.2), 0.5);
+    gl_FragColor.rgb = mix(wash, vec3(0.022, 0.02, 0.028), k);
+  }
 }`;
 function injectCaustics(sh) {
   sh.vertexShader = sh.vertexShader
-    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos; attribute float ao; varying vec3 vLocal; varying vec3 vObjN; varying float vAo;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLocal = position; vObjN = normal; vAo = ao;')
     .replace('#include <project_vertex>', '#include <project_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
   sh.fragmentShader = sh.fragmentShader
-    .replace('#include <common>', '#include <common>\n' + CAUSTIC_LIGHT_GLSL)
+    .replace('#include <common>', '#include <common>\n' + CAUSTIC_LIGHT_GLSL + STYLE_GLSL)
+    .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= styleAO(vAo);')
+    .replace('#include <dithering_fragment>', '#include <dithering_fragment>\n' + STYLE_SURFACE_GLSL)
     .replace('#include <lights_fragment_begin>', THREE.ShaderChunk.lights_fragment_begin.replace(
       'getDirectionalLightInfo( directionalLight, geometry, directLight );',
-      'getDirectionalLightInfo( directionalLight, geometry, directLight );\n\t\tdirectLight.color *= causticLight();'));
+      'getDirectionalLightInfo( directionalLight, geometry, directLight );\n\t\tdirectLight.color *= causticLight() * styleLight(max(dot(geometry.normal, directLight.direction), 0.0));'));
 }
 function reefMat({ sway = 0, glow = 0, caustic = 0.6, roughness = 0.85, scale = G } = {}) {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness: 0, envMapIntensity: 0.3 });
-  const u = { uTime: U.uTime, uNight: U.uNight, uWater: U.uWater, uSunDir: U.uSunDir, uSway: { value: sway }, uGlow: { value: glow }, uCaus: { value: Math.min(1, caustic * 1.6) }, uScale: { value: scale } };
+  const u = { uTime: U.uTime, uNight: U.uNight, uWater: U.uWater, uSunDir: U.uSunDir, uSway: { value: sway }, uGlow: { value: glow }, uCaus: { value: Math.min(1, caustic * 1.6) }, uScale: { value: scale }, uStyle: U.uStyle };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
     injectCaustics(sh);
@@ -1313,7 +1375,7 @@ function fishMats(sp) {
   const u = { uPhase: { value: 0 }, uAmp: { value: 0.06 }, uNose: { value: sp.L - 1 }, uLen: { value: sp.L } };
   const patch = (m, key) => {
     m.onBeforeCompile = (sh) => {
-      Object.assign(sh.uniforms, u, { uTime: U.uTime, uNight: U.uNight, uWater: U.uWater, uSunDir: U.uSunDir, uCaus: { value: 0.8 } });
+      Object.assign(sh.uniforms, u, { uTime: U.uTime, uNight: U.uNight, uWater: U.uWater, uSunDir: U.uSunDir, uCaus: { value: 0.8 }, uStyle: U.uStyle });
       injectCaustics(sh);
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nuniform float uPhase; uniform float uAmp; uniform float uNose; uniform float uLen;')
@@ -1330,8 +1392,16 @@ function fishMats(sp) {
     fin: patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, envMapIntensity: 0.8, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false }), 'fishFin'),
   };
 }
-const pecMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false });
-const fishMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.05 });
+function styledPlain(m, key) {
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, { uTime: U.uTime, uNight: U.uNight, uWater: U.uWater, uSunDir: U.uSunDir, uCaus: { value: 0.7 }, uStyle: U.uStyle });
+    injectCaustics(sh);
+  };
+  m.customProgramCacheKey = () => key;
+  return m;
+}
+const pecMat = styledPlain(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false }), 'pec');
+const fishMat = styledPlain(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.05 }), 'critter');
 const fishes = [];
 const school = { target: new V3(0, 13, 0), c: new V3(), v: new V3(), members: [] };
 const ROCK_ANCHORS = [new V3(-12, 6, -4), new V3(10, 6.5, -4), new V3(-3.5, 7.5, -4.5)];
@@ -1705,21 +1775,19 @@ void main() {
   float ao = 0.0; vec3 vol = vec3(0.0);
   vec2 o[5]; o[0] = vec2(0.0); o[1] = vec2(1.0, 1.0); o[2] = vec2(-1.0, 1.0); o[3] = vec2(1.0, -1.0); o[4] = vec2(-1.0, -1.0);
   for (int i = 0; i < 5; i++) { vec2 q = uv + o[i] * uHalfTexel * 1.5; ao += texture2D(tAO, q).r; vol += texture2D(tVol, q).rgb; }
-  col *= mix(1.0, ao / 5.0, voxel ? 0.85 : (cel ? 0.45 : 0.7));
-  col += vol / 5.0 * (ink ? 0.5 : 1.0);
-  col += texture2D(tBloom, uv).rgb * uBloom * (pixel ? 0.6 : 1.0);
+  col *= mix(1.0, ao / 5.0, voxel ? 0.85 : (cel ? 0.45 : (ink ? 0.3 : 0.7)));
+  col += vol / 5.0 * (ink ? 0.0 : 1.0);
+  col += texture2D(tBloom, uv).rgb * uBloom * (pixel ? 0.6 : (ink ? 0.0 : 1.0));
   float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  col = max(mix(vec3(luma), col, cel ? 1.45 : (pixel ? 1.3 : 1.22)), 0.0);
-  col = aces(col * uExposure);
+  col = max(mix(vec3(luma), col, cel ? 1.35 : (pixel ? 1.3 : (ink ? 1.0 : 1.22))), 0.0);
+  col = ink ? clamp(col * 1.04, 0.0, 1.0) : aces(col * uExposure * (cel ? 0.72 : (pixel ? 0.85 : 1.0)));
   if (voxel) col = col * col * (3.0 - 2.0 * col) * 0.25 + col * 0.75;
   if (voxel || cel || water) col *= mix(0.68, 1.0, smoothstep(1.2, 0.3, length((vUv - 0.5) * vec2(1.25, 1.0))));
   col = toSRGB(col);
   vec2 fp = gl_FragCoord.xy;
   if (cel) {
-    float L = dot(col, vec3(0.299, 0.587, 0.114));
-    float q = (floor(L * 4.0) + smoothstep(0.4, 0.6, fract(L * 4.0))) / 4.0;
-    col = clamp(col * (q + 0.07) / max(L, 0.03), 0.0, 1.0);
-    col = mix(col, vec3(0.04, 0.06, 0.09), edges(uv, 1.0) * 0.9);
+    vec2 ce = edges2(uv, 1.0);
+    col = mix(col, vec3(0.04, 0.06, 0.09), clamp(ce.x + ce.y * 0.4, 0.0, 1.0) * 0.9);
   } else if (water) {
     float e = edges(uv, 1.6);
     float paper = fbm(fp * 0.035), gran = fbm(fp * 0.25 + 7.0);
@@ -1730,18 +1798,11 @@ void main() {
     col *= 0.95 + 0.05 * paper;
   } else if (pixel) {
     float b = bayer4(floor(vUv / (uTexel * uPixel))) - 0.5;
-    col = clamp(floor(col * 6.0 + 0.5 + b * 0.55) / 6.0, 0.0, 1.0);
+    col = clamp(floor(col * 8.0 + 0.5 + b * 0.25) / 8.0, 0.0, 1.0);
   } else if (ink) {
-    float L = clamp(pow(dot(col, vec3(0.299, 0.587, 0.114)), 0.7) * 1.25, 0.0, 1.0);
-    float wob = (vnoise(fp * 0.05) - 0.5) * 3.0;
-    float k = 0.0;
-    k = max(k, hatch(fp.x + fp.y + wob, 9.0) * (1.0 - smoothstep(0.42, 0.55, L)) * 0.7);
-    k = max(k, hatch(fp.x - fp.y + wob, 9.0) * (1.0 - smoothstep(0.24, 0.34, L)) * 0.8);
-    k = max(k, hatch(fp.y + wob * 0.5, 6.0) * (1.0 - smoothstep(0.1, 0.16, L)));
     vec2 ie = edges2(uv, 1.2);
-    k = max(k, clamp(ie.x + ie.y * 0.35, 0.0, 1.0));
-    vec3 paper = vec3(0.96, 0.93, 0.86) * (0.95 + 0.05 * fbm(fp * 0.03));
-    col = mix(mix(paper, col * 1.3, 0.28), vec3(0.12, 0.11, 0.15), k * 0.85);
+    col *= 0.95 + 0.05 * fbm(fp * 0.03);
+    col = mix(col, vec3(0.1, 0.09, 0.12), clamp(ie.x + ie.y * 0.2, 0.0, 1.0) * 0.85);
   }
   float grain = voxel ? 0.012 : (water ? 0.02 : (ink ? 0.015 : 0.0));
   col += (fract(sin(dot(fp + fract(uTime) * 97.0, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * grain;
@@ -1765,7 +1826,7 @@ void main() {
     }
     compMat.uniforms.uHalfTexel.value.set(1 / hw, 1 / hh);
     compMat.uniforms.uTexel.value.set(1 / w, 1 / h);
-    compMat.uniforms.uPixel.value = Math.max(3, Math.round(5 * renderer.getPixelRatio()));
+    compMat.uniforms.uPixel.value = Math.max(2, Math.round(3 * renderer.getPixelRatio()));
   }
   function run(mat, target) { quad.material = mat; renderer.setRenderTarget(target); renderer.render(fsScene, fsCam); }
   function render() {
@@ -1984,11 +2045,17 @@ function updateLabels() {
   }
 }
 const STYLES = ['voxel', 'cel', 'watercolor', 'pixel', 'ink'];
+const PAPER = new THREE.Color(0xf2ead8), roomBg = scene.background, backTex = backMat.map;
+let curStyle = 'voxel';
 const styleBtns = [...document.querySelectorAll('.chip[data-style]')];
 function setStyle(name) {
   const i = STYLES.indexOf(name);
   if (i < 0) return;
-  post.comp.uStyle.value = i;
+  post.comp.uStyle.value = i; U.uStyle.value = i; curStyle = name;
+  const isInk = name === 'ink';
+  scene.background = isInk ? PAPER : roomBg;
+  backMat.map = isInk ? null : backTex; backMat.needsUpdate = true;
+  waterMat.opacity = isInk ? 0.08 : 0.22;
   for (const b of styleBtns) b.setAttribute('aria-pressed', String(b.dataset.style === name));
   try { localStorage.setItem('voxel-reef-style', name); } catch (e) { /* storage unavailable */ }
 }
@@ -2171,7 +2238,7 @@ function frame(now) {
   hemi.intensity = L(0.3, 0.12, n); hemi.color.lerpColors(DAY.sky, NIGHT.sky, n);
   sun.intensity = L(2.6, 0.75, n); sun.color.lerpColors(DAY.sun, NIGHT.sun, n);
   scene.fog.color.lerpColors(DAY_FOG, NIGHT_FOG, n);
-  backMat.color.lerpColors(DAY.back, NIGHT.back, n);
+  if (curStyle === 'ink') backMat.color.copy(PAPER); else backMat.color.lerpColors(DAY.back, NIGHT.back, n);
   ledMat.emissive.lerpColors(DAY.led, NIGHT.led, n);
   waterMat.color.lerpColors(DAY.water, NIGHT.water, n);
 

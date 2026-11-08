@@ -172,7 +172,7 @@ h1 span { color: var(--accent); }
       <button id="b-reset" class="btn" type="button"><span class="vox" style="--c: var(--fg)"></span>Reset view</button>
       <button id="b-drift" class="btn" type="button" aria-pressed="true"><span class="vox" style="--c: var(--muted)"></span>Drift camera</button>
     </nav>
-    <p class="hint">Drag to orbit · Right-drag, Shift-drag or two fingers to pan · Scroll or pinch to zoom toward the pointer · Tap the water to feed · Tap a fish or coral to identify it</p>
+    <p class="hint">Touch: one finger pans, two fingers rotate, pinch zooms · Mouse: drag to orbit, right-drag or Shift-drag to pan, scroll to zoom · Tap the water to feed · Tap a fish or coral to identify it</p>
   </div>
 </div>
 
@@ -1760,7 +1760,9 @@ const mid = () => { const [a, b] = [...ptrs.values()]; return { x: (a.x + b.x) /
 el.addEventListener('contextmenu', (e) => e.preventDefault());
 el.addEventListener('pointerdown', (e) => {
   el.setPointerCapture(e.pointerId);
-  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, pan: e.button === 1 || e.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey });
+  const btnPan = e.button === 1 || e.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey;
+  // touch: one finger pans; mouse: left-drag orbits, right/Shift-drag pans
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, btnPan, pan: btnPan || e.pointerType === 'touch' });
   if (ptrs.size === 1) moved = 0;
   if (ptrs.size === 2) { const m = mid(); lastPinch = m.d; lastMid = m; moved = 99; }
   userMoved();
@@ -1776,14 +1778,14 @@ el.addEventListener('pointermove', (e) => {
   } else if (ptrs.size === 2) {
     const m = mid();
     if (lastPinch > 0 && m.d > 0) zoomAt(lastPinch / m.d, m.x, m.y);
-    if (lastMid) pan(m.x - lastMid.x, m.y - lastMid.y);
+    if (lastMid) { cam.theta += (m.x - lastMid.x) * 0.005; cam.phi = clamp(cam.phi - (m.y - lastMid.y) * 0.004, -1.2, 1.45); }
     lastPinch = m.d; lastMid = m;
   }
   userMoved();
 });
 function endPtr(e) {
   if (!ptrs.has(e.pointerId)) return;
-  if (ptrs.size === 1 && moved < 6 && e.type === 'pointerup' && !ptrs.get(e.pointerId).pan) tap(e.clientX, e.clientY);
+  if (ptrs.size === 1 && moved < 6 && e.type === 'pointerup' && !ptrs.get(e.pointerId).btnPan) tap(e.clientX, e.clientY);
   ptrs.delete(e.pointerId);
   if (ptrs.size < 2) { lastPinch = 0; lastMid = null; }
 }

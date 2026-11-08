@@ -78,6 +78,17 @@ h1 {
   letter-spacing: 0.04em;
 }
 h1 span { color: var(--accent); }
+.toprow { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.styles { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 5px; max-width: 100%; }
+.styles-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); padding: 0 8px 0 6px; }
+.chip {
+  pointer-events: auto;
+  font: 600 13px/1 var(--font-ui); color: var(--muted);
+  background: none; border: 0; border-radius: 9px; padding: 9px 11px; cursor: pointer;
+}
+.chip:hover { color: var(--fg); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--room); }
 .readout { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; }
 .readout dt {
   font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
@@ -141,6 +152,7 @@ h1 span { color: var(--accent); }
 <div id="loading">Filling the tank…</div>
 
 <div class="hud">
+  <div class="toprow">
   <header class="panel top">
     <h1>Voxel <span>Reef</span></h1>
     <dl class="readout">
@@ -150,6 +162,15 @@ h1 span { color: var(--accent); }
       <div><dt>Fish</dt><dd id="r-fish">18</dd></div>
     </dl>
   </header>
+  <nav class="panel styles" aria-label="Art style">
+    <span class="styles-label">Style</span>
+    <button class="chip" type="button" data-style="voxel" aria-pressed="true">Voxel</button>
+    <button class="chip" type="button" data-style="cel" aria-pressed="false">Cel</button>
+    <button class="chip" type="button" data-style="watercolor" aria-pressed="false">Watercolor</button>
+    <button class="chip" type="button" data-style="pixel" aria-pressed="false">Pixel</button>
+    <button class="chip" type="button" data-style="ink" aria-pressed="false">Ink</button>
+  </nav>
+  </div>
 
   <div class="bottom">
     <aside id="card" class="panel card" hidden aria-live="polite">
@@ -1616,39 +1637,119 @@ void main() {
   gl_FragColor = vec4(s / 12.0 + texture2D(tAdd, vUv).rgb, 1.0);
 }`, { tSrc: { value: null }, tAdd: { value: null }, uTexel: { value: new THREE.Vector2() } });
 
+  // Final pass. uStyle picks the art style: 0 voxel (filmic), 1 cel, 2 watercolor, 3 pixel, 4 ink.
   const compMat = SM(`uniform sampler2D tScene; uniform sampler2D tVol; uniform sampler2D tAO; uniform sampler2D tBloom; uniform sampler2D tDepth;
-uniform vec2 uHalfTexel; uniform float uTime; uniform float uExposure; uniform float uBloom; uniform vec3 uBoxMin; uniform vec3 uBoxMax;
+uniform vec2 uHalfTexel; uniform vec2 uTexel; uniform float uPixel; uniform float uStyle;
+uniform float uTime; uniform float uExposure; uniform float uBloom; uniform vec3 uBoxMin; uniform vec3 uBoxMax;
 varying vec2 vUv;
 ${RECON}
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
-void main() {
-  vec2 uv = vUv;
-  float d = texture2D(tDepth, vUv).x;
-  vec3 wp = (uCamWorld * vec4(viewPosAt(vUv, min(d, 0.99999)), 1.0)).xyz;
-  if (d < 1.0 && all(greaterThan(wp, uBoxMin - 0.05)) && all(lessThan(wp, uBoxMax + 0.05))) {
-    uv += vec2(sin(vUv.y * 90.0 + uTime * 2.1) + sin(vUv.x * 57.0 - uTime * 1.7),
-               cos(vUv.x * 83.0 + uTime * 1.9) + sin(vUv.y * 51.0 + uTime * 1.3)) * 0.0004;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p) { return vnoise(p) * 0.5 + vnoise(p * 2.03) * 0.3 + vnoise(p * 4.1) * 0.2; }
+float bayer2(vec2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
+float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+float linZ(vec2 uv) { return -viewPosAt(uv, texture2D(tDepth, uv).x).z; }
+float lumS(vec2 uv) { vec3 c = texture2D(tScene, uv).rgb; c = c / (1.0 + c); return dot(c, vec3(0.299, 0.587, 0.114)); }
+// outlines from depth creases/silhouettes and colour boundaries
+vec2 edges2(vec2 uv, float w) {
+  vec2 t = uTexel * w;
+  float zc = linZ(uv);
+  float dz = (abs(linZ(uv + vec2(t.x, 0.0)) + linZ(uv - vec2(t.x, 0.0)) - 2.0 * zc)
+            + abs(linZ(uv + vec2(0.0, t.y)) + linZ(uv - vec2(0.0, t.y)) - 2.0 * zc)) / max(zc, 0.1);
+  float dl = abs(lumS(uv + vec2(t.x, 0.0)) - lumS(uv - vec2(t.x, 0.0))) + abs(lumS(uv + vec2(0.0, t.y)) - lumS(uv - vec2(0.0, t.y)));
+  return vec2(smoothstep(0.03, 0.1, dz), smoothstep(0.1, 0.28, dl));
+}
+float edges(vec2 uv, float w) { vec2 e = edges2(uv, w); return clamp(e.x + e.y, 0.0, 1.0); }
+// Kuwahara filter: flat, painterly patches with crisp boundaries
+vec3 kuwahara(vec2 uv) {
+  vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0);
+  vec3 s0 = vec3(0.0), s1 = vec3(0.0), s2 = vec3(0.0), s3 = vec3(0.0);
+  for (int j = 0; j <= 3; j++) for (int i = 0; i <= 3; i++) {
+    vec2 o = vec2(float(i), float(j)) * uTexel * 1.6;
+    vec3 c;
+    c = texture2D(tScene, uv + vec2(-o.x, -o.y)).rgb; m0 += c; s0 += c * c;
+    c = texture2D(tScene, uv + vec2( o.x, -o.y)).rgb; m1 += c; s1 += c * c;
+    c = texture2D(tScene, uv + vec2(-o.x,  o.y)).rgb; m2 += c; s2 += c * c;
+    c = texture2D(tScene, uv + vec2( o.x,  o.y)).rgb; m3 += c; s3 += c * c;
   }
-  vec2 ca = (vUv - 0.5) * 0.002;
-  vec3 col = vec3(texture2D(tScene, uv + ca).r, texture2D(tScene, uv).g, texture2D(tScene, uv - ca).b);
+  m0 /= 16.0; m1 /= 16.0; m2 /= 16.0; m3 /= 16.0;
+  float v0 = dot(s0 / 16.0 - m0 * m0, vec3(1.0)), v1 = dot(s1 / 16.0 - m1 * m1, vec3(1.0));
+  float v2 = dot(s2 / 16.0 - m2 * m2, vec3(1.0)), v3 = dot(s3 / 16.0 - m3 * m3, vec3(1.0));
+  vec3 r = m0; float v = v0;
+  if (v1 < v) { r = m1; v = v1; }
+  if (v2 < v) { r = m2; v = v2; }
+  if (v3 < v) { r = m3; }
+  return r;
+}
+float hatch(float c, float period) { float f = abs(fract(c / period) - 0.5) * 2.0; return 1.0 - smoothstep(0.7, 0.9, f); }
+void main() {
+  float st = uStyle;
+  bool voxel = st < 0.5, cel = st > 0.5 && st < 1.5, water = st > 1.5 && st < 2.5, pixel = st > 2.5 && st < 3.5, ink = st > 3.5;
+  vec2 uv = vUv;
+  if (pixel) { vec2 blk = uTexel * uPixel; uv = (floor(vUv / blk) + 0.5) * blk; }
+  float d = texture2D(tDepth, uv).x;
+  vec3 wp = (uCamWorld * vec4(viewPosAt(uv, min(d, 0.99999)), 1.0)).xyz;
+  if ((voxel || water) && d < 1.0 && all(greaterThan(wp, uBoxMin - 0.05)) && all(lessThan(wp, uBoxMax + 0.05))) {
+    uv += vec2(sin(vUv.y * 90.0 + uTime * 2.1) + sin(vUv.x * 57.0 - uTime * 1.7),
+               cos(vUv.x * 83.0 + uTime * 1.9) + sin(vUv.y * 51.0 + uTime * 1.3)) * (water ? 0.0007 : 0.0004);
+  }
+  vec3 col;
+  if (water) col = kuwahara(uv);
+  else if (voxel) { vec2 ca = (vUv - 0.5) * 0.002; col = vec3(texture2D(tScene, uv + ca).r, texture2D(tScene, uv).g, texture2D(tScene, uv - ca).b); }
+  else col = texture2D(tScene, uv).rgb;
   float ao = 0.0; vec3 vol = vec3(0.0);
   vec2 o[5]; o[0] = vec2(0.0); o[1] = vec2(1.0, 1.0); o[2] = vec2(-1.0, 1.0); o[3] = vec2(1.0, -1.0); o[4] = vec2(-1.0, -1.0);
-  for (int i = 0; i < 5; i++) { vec2 q = vUv + o[i] * uHalfTexel * 1.5; ao += texture2D(tAO, q).r; vol += texture2D(tVol, q).rgb; }
-  col *= mix(1.0, ao / 5.0, 0.85);
-  col += vol / 5.0;
-  col += texture2D(tBloom, vUv).rgb * uBloom;
+  for (int i = 0; i < 5; i++) { vec2 q = uv + o[i] * uHalfTexel * 1.5; ao += texture2D(tAO, q).r; vol += texture2D(tVol, q).rgb; }
+  col *= mix(1.0, ao / 5.0, voxel ? 0.85 : (cel ? 0.45 : 0.7));
+  col += vol / 5.0 * (ink ? 0.5 : 1.0);
+  col += texture2D(tBloom, uv).rgb * uBloom * (pixel ? 0.6 : 1.0);
   float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  col = max(mix(vec3(luma), col, 1.22), 0.0);
+  col = max(mix(vec3(luma), col, cel ? 1.45 : (pixel ? 1.3 : 1.22)), 0.0);
   col = aces(col * uExposure);
-  col = col * col * (3.0 - 2.0 * col) * 0.25 + col * 0.75;
-  col *= mix(0.68, 1.0, smoothstep(1.2, 0.3, length((vUv - 0.5) * vec2(1.25, 1.0))));
+  if (voxel) col = col * col * (3.0 - 2.0 * col) * 0.25 + col * 0.75;
+  if (voxel || cel || water) col *= mix(0.68, 1.0, smoothstep(1.2, 0.3, length((vUv - 0.5) * vec2(1.25, 1.0))));
   col = toSRGB(col);
-  col += (fract(sin(dot(gl_FragCoord.xy + fract(uTime) * 97.0, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.012;
+  vec2 fp = gl_FragCoord.xy;
+  if (cel) {
+    float L = dot(col, vec3(0.299, 0.587, 0.114));
+    float q = (floor(L * 4.0) + smoothstep(0.4, 0.6, fract(L * 4.0))) / 4.0;
+    col = clamp(col * (q + 0.07) / max(L, 0.03), 0.0, 1.0);
+    col = mix(col, vec3(0.04, 0.06, 0.09), edges(uv, 1.0) * 0.9);
+  } else if (water) {
+    float e = edges(uv, 1.6);
+    float paper = fbm(fp * 0.035), gran = fbm(fp * 0.25 + 7.0);
+    col = pow(col, vec3(0.8)) * 1.06;
+    col = 1.0 - (1.0 - col) * (0.86 + 0.2 * gran);
+    col *= 1.0 - e * 0.22;
+    col = mix(col, vec3(0.98, 0.96, 0.91), 0.1 + 0.1 * paper);
+    col *= 0.95 + 0.05 * paper;
+  } else if (pixel) {
+    float b = bayer4(floor(vUv / (uTexel * uPixel))) - 0.5;
+    col = clamp(floor(col * 6.0 + 0.5 + b * 0.55) / 6.0, 0.0, 1.0);
+  } else if (ink) {
+    float L = clamp(pow(dot(col, vec3(0.299, 0.587, 0.114)), 0.7) * 1.25, 0.0, 1.0);
+    float wob = (vnoise(fp * 0.05) - 0.5) * 3.0;
+    float k = 0.0;
+    k = max(k, hatch(fp.x + fp.y + wob, 9.0) * (1.0 - smoothstep(0.42, 0.55, L)) * 0.7);
+    k = max(k, hatch(fp.x - fp.y + wob, 9.0) * (1.0 - smoothstep(0.24, 0.34, L)) * 0.8);
+    k = max(k, hatch(fp.y + wob * 0.5, 6.0) * (1.0 - smoothstep(0.1, 0.16, L)));
+    vec2 ie = edges2(uv, 1.2);
+    k = max(k, clamp(ie.x + ie.y * 0.35, 0.0, 1.0));
+    vec3 paper = vec3(0.96, 0.93, 0.86) * (0.95 + 0.05 * fbm(fp * 0.03));
+    col = mix(mix(paper, col * 1.3, 0.28), vec3(0.12, 0.11, 0.15), k * 0.85);
+  }
+  float grain = voxel ? 0.012 : (water ? 0.02 : (ink ? 0.015 : 0.0));
+  col += (fract(sin(dot(fp + fract(uTime) * 97.0, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * grain;
   gl_FragColor = vec4(col, 1.0);
 }`, Object.assign({}, S, {
     tScene: { value: sceneRT.texture }, tVol: { value: volRT.texture }, tAO: { value: aoRT.texture }, tBloom: { value: null },
-    uHalfTexel: { value: new THREE.Vector2() }, uExposure: { value: 0.9 }, uBloom: { value: 0.35 },
+    uHalfTexel: { value: new THREE.Vector2() }, uTexel: { value: new THREE.Vector2() }, uPixel: { value: 4 }, uStyle: { value: 0 },
+    uExposure: { value: 0.9 }, uBloom: { value: 0.35 },
   }));
 
   const size = new THREE.Vector2();
@@ -1663,6 +1764,8 @@ void main() {
       down[i].setSize(dw, dh); up[i].setSize(dw, dh);
     }
     compMat.uniforms.uHalfTexel.value.set(1 / hw, 1 / hh);
+    compMat.uniforms.uTexel.value.set(1 / w, 1 / h);
+    compMat.uniforms.uPixel.value = Math.max(3, Math.round(5 * renderer.getPixelRatio()));
   }
   function run(mat, target) { quad.material = mat; renderer.setRenderTarget(target); renderer.render(fsScene, fsCam); }
   function render() {
@@ -1880,6 +1983,17 @@ function updateLabels() {
     o.tag.style.transform = `translate(${((projV.x + 1) / 2 * w).toFixed(1)}px, ${((1 - projV.y) / 2 * h).toFixed(1)}px) translate(-50%, -130%)`;
   }
 }
+const STYLES = ['voxel', 'cel', 'watercolor', 'pixel', 'ink'];
+const styleBtns = [...document.querySelectorAll('.chip[data-style]')];
+function setStyle(name) {
+  const i = STYLES.indexOf(name);
+  if (i < 0) return;
+  post.comp.uStyle.value = i;
+  for (const b of styleBtns) b.setAttribute('aria-pressed', String(b.dataset.style === name));
+  try { localStorage.setItem('voxel-reef-style', name); } catch (e) { /* storage unavailable */ }
+}
+for (const b of styleBtns) b.addEventListener('click', () => setStyle(b.dataset.style));
+try { setStyle(localStorage.getItem('voxel-reef-style') || 'voxel'); } catch (e) { setStyle('voxel'); }
 const driftBtn = $('b-drift');
 driftBtn.setAttribute('aria-pressed', String(cam.drift));
 driftBtn.addEventListener('click', () => { cam.drift = !cam.drift; driftBtn.setAttribute('aria-pressed', String(cam.drift)); });
